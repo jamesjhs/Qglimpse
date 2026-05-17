@@ -123,6 +123,7 @@ StyleCopReport.xml
 *.vspscc
 *.vssscc
 .builds
+dist/
 *.pidb
 *.svclog
 *.scc
@@ -230,6 +231,11 @@ PublishScripts/
 **/[Pp]ackages/*
 # except build/, which is used as an MSBuild target.
 !**/[Pp]ackages/build/
+!packages/
+!packages/server/
+!packages/server/**
+!packages/web/
+!packages/web/**
 # Uncomment if necessary however generally it will be regenerated when needed
 #!**/[Pp]ackages/repositories.config
 # NuGet v3's project.json files produces more ignorable files
