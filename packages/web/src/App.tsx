@@ -18,6 +18,23 @@ type Demographic = {
   options: string[]
 }
 
+type Question = {
+  id: number
+  institutionId: number
+  templateKey: string | null
+  questionType: 'single' | 'multiple' | 'text' | 'scale' | 'boolean' | 'star'
+  prompt: string
+  options: string[]
+  isActive: boolean
+  includeInKiosk: boolean
+  isDemographic: boolean
+  displayOrder: number
+  scheduleDays: number[]
+  scheduleStartTime: string | null
+  scheduleEndTime: string | null
+  createdAt: string
+}
+
 type BootstrapPayload = {
   app: {
     name: string
@@ -40,6 +57,7 @@ type BootstrapPayload = {
     turnstileSiteKey: string
     devBypassTokenHint: string | null
   }
+  questionTypes: string[]
 }
 
 type RootOverview = {
@@ -47,8 +65,28 @@ type RootOverview = {
   institutionUserCount: number
   demographicQuestionCount: number
   responseCount: number
+  totalResponseCount: number
   kioskEnabledCount: number
+  totalActiveQuestions: number
+  kioskSessionsTotal: number
+  kioskSessionsToday: number
   trendlinesEnabled: boolean
+}
+
+type AnalyticsData = {
+  totalResponses: number
+  responsesByQuestion: Array<{
+    questionKey: string
+    prompt: string
+    questionType: string
+    responses: Array<{ answer: string; count: number }>
+  }>
+  responsesPerDay: Array<{ date: string; count: number }>
+  demographicBreakdown: Array<{
+    questionKey: string
+    prompt: string
+    responses: Array<{ answer: string; count: number }>
+  }>
 }
 
 type SmtpSettings = {
@@ -129,6 +167,31 @@ function App() {
     port: '587',
     secureLoginType: 'starttls',
   })
+  const [institutionQuestions, setInstitutionQuestions] = useState<Question[]>([])
+  const [analyticsData, setAnalyticsData] = useState<AnalyticsData | null>(null)
+  const [analyticsFrom, setAnalyticsFrom] = useState(() => {
+    const d = new Date()
+    d.setDate(d.getDate() - 30)
+    return d.toISOString().slice(0, 10)
+  })
+  const [analyticsTo, setAnalyticsTo] = useState(() => new Date().toISOString().slice(0, 10))
+  const [smtpTestAddress, setSmtpTestAddress] = useState('')
+  const [smtpTestResult, setSmtpTestResult] = useState<string | null>(null)
+  const [kioskState, setKioskState] = useState<'landing' | 'questions' | 'demographics' | 'thankyou'>('landing')
+  const [kioskSessionToken, setKioskSessionToken] = useState<string | null>(null)
+  const [kioskQuestions, setKioskQuestions] = useState<Question[]>([])
+  const [kioskCurrentIdx, setKioskCurrentIdx] = useState(0)
+  const [kioskCurrentAnswer, setKioskCurrentAnswer] = useState<string>('')
+  const [kioskStarValue, setKioskStarValue] = useState(0)
+  const [kioskSliderValue, setKioskSliderValue] = useState(5)
+  const [kioskMultiAnswers, setKioskMultiAnswers] = useState<string[]>([])
+  const [kioskDemoIdx, setKioskDemoIdx] = useState(0)
+  const [kioskDemoAnswers, setKioskDemoAnswers] = useState<Record<string, string>>({})
+  const [kioskCountdown, setKioskCountdown] = useState(10)
+  const [kioskLoading, setKioskLoading] = useState(false)
+  const [crossTabPrimary, setCrossTabPrimary] = useState('')
+  const [crossTabDemo, setCrossTabDemo] = useState('')
+  const [crossTabData, setCrossTabData] = useState<Array<{ primaryAnswer: string; demoAnswer: string; count: number | '< 5' }> | null>(null)
 
   useEffect(() => {
     const load = async () => {
@@ -147,6 +210,18 @@ function App() {
 
     void load()
   }, [])
+
+  useEffect(() => {
+    if (kioskState !== 'thankyou') return
+    if (kioskCountdown <= 0) {
+      setKioskState('landing')
+      setKioskSessionToken(null)
+      setKioskDemoAnswers({})
+      return
+    }
+    const timer = setTimeout(() => setKioskCountdown((c) => c - 1), 1000)
+    return () => clearTimeout(timer)
+  }, [kioskState, kioskCountdown])
 
   const selectedInstitution = bootstrap?.institutions[0] ?? null
   const localTime = useMemo(() => {
@@ -540,6 +615,194 @@ function App() {
     setAuthUsers((current) => current.map((item) => (item.id === result.user.id ? result.user : item)))
   }
 
+  const loadInstitutionQuestions = async (institutionId: number, token: string) => {
+    const response = await fetch(`/api/institutions/${institutionId}/questions`, {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+    if (!response.ok) return
+    const result = (await response.json()) as { questions: Question[] }
+    setInstitutionQuestions(result.questions)
+  }
+
+  const toggleQuestionKiosk = async (question: Question) => {
+    if (!authToken) return
+    const response = await fetch(`/api/institutions/${question.institutionId}/questions/${question.id}`, {
+      method: 'PATCH',
+      headers: { Authorization: `Bearer ${authToken}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ includeInKiosk: !question.includeInKiosk }),
+    })
+    if (!response.ok) {
+      const result = (await response.json()) as { error?: string }
+      throw new Error(result.error ?? 'Unable to update question.')
+    }
+    const updated = (await response.json()) as Question
+    setInstitutionQuestions((current) => current.map((q) => (q.id === updated.id ? updated : q)))
+  }
+
+  const createCustomQuestion = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    if (!authToken) return
+    setError(null)
+    const formData = new FormData(event.currentTarget)
+    const institutionId = selectedInstitution?.id
+    if (!institutionId) return
+    const optionsRaw = String(formData.get('options') ?? '')
+    const options = optionsRaw ? optionsRaw.split(',').map((s) => s.trim()).filter(Boolean) : []
+    const scheduleDaysRaw = String(formData.get('scheduleDays') ?? '')
+    const scheduleDays = scheduleDaysRaw ? scheduleDaysRaw.split(',').map(Number).filter((n) => !isNaN(n) && n >= 0 && n <= 6) : []
+    const response = await fetch(`/api/institutions/${institutionId}/questions`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${authToken}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        questionType: String(formData.get('questionType') ?? 'text'),
+        prompt: String(formData.get('prompt') ?? ''),
+        options,
+        includeInKiosk: formData.get('includeInKiosk') === 'true',
+        isDemographic: formData.get('isDemographic') === 'true',
+        displayOrder: Number(formData.get('displayOrder') ?? 0),
+        scheduleDays,
+        scheduleStartTime: String(formData.get('scheduleStartTime') ?? '') || null,
+        scheduleEndTime: String(formData.get('scheduleEndTime') ?? '') || null,
+      }),
+    })
+    if (!response.ok) {
+      const result = (await response.json()) as { error?: string }
+      throw new Error(result.error ?? 'Unable to create question.')
+    }
+    const created = (await response.json()) as Question
+    setInstitutionQuestions((current) => [...current, created])
+    event.currentTarget.reset()
+  }
+
+  const deleteQuestion = async (question: Question) => {
+    if (!authToken) return
+    setError(null)
+    const response = await fetch(`/api/institutions/${question.institutionId}/questions/${question.id}`, {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${authToken}` },
+    })
+    if (!response.ok) {
+      const result = (await response.json()) as { error?: string }
+      throw new Error(result.error ?? 'Unable to delete question.')
+    }
+    setInstitutionQuestions((current) => current.filter((q) => q.id !== question.id))
+  }
+
+  const loadAnalytics = async (institutionId: number, token: string) => {
+    const params = new URLSearchParams()
+    if (analyticsFrom) params.set('from', analyticsFrom)
+    if (analyticsTo) params.set('to', analyticsTo)
+    const response = await fetch(`/api/institutions/${institutionId}/analytics?${params.toString()}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+    if (!response.ok) return
+    setAnalyticsData((await response.json()) as AnalyticsData)
+  }
+
+  const loadCrossTab = async () => {
+    if (!authToken || !selectedInstitution) return
+    const params = new URLSearchParams({ primaryKey: crossTabPrimary, demographicKey: crossTabDemo })
+    const response = await fetch(`/api/institutions/${selectedInstitution.id}/analytics/cross-tab?${params.toString()}`, {
+      headers: { Authorization: `Bearer ${authToken}` },
+    })
+    if (!response.ok) return
+    const data = (await response.json()) as { cells: Array<{ primaryAnswer: string; demoAnswer: string; count: number | '< 5' }> }
+    setCrossTabData(data.cells)
+  }
+
+  const sendSmtpTestEmail = async () => {
+    if (!authToken || !smtpTestAddress) return
+    setError(null)
+    setSmtpTestResult(null)
+    try {
+      const response = await fetch('/api/settings/smtp/test', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${authToken}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ toAddress: smtpTestAddress }),
+      })
+      const result = (await response.json()) as { message?: string; error?: string }
+      if (!response.ok) throw new Error(result.error ?? 'Test email failed.')
+      setSmtpTestResult(result.message ?? 'Test email sent.')
+    } catch (caughtError) {
+      setError(caughtError instanceof Error ? caughtError.message : 'Test email failed.')
+    }
+  }
+
+  const startKiosk = async () => {
+    setKioskLoading(true)
+    setError(null)
+    try {
+      const slug = selectedInstitution?.slug
+      if (!slug) return
+      const response = await fetch(`/api/kiosk/${slug}/session`, { method: 'POST' })
+      if (!response.ok) {
+        const result = (await response.json()) as { error?: string }
+        throw new Error(result.error ?? 'Unable to start kiosk session.')
+      }
+      const data = (await response.json()) as { sessionToken: string; questions: Question[] }
+      setKioskSessionToken(data.sessionToken)
+      setKioskQuestions(data.questions)
+      setKioskCurrentIdx(0)
+      setKioskCurrentAnswer('')
+      setKioskStarValue(0)
+      setKioskSliderValue(5)
+      setKioskMultiAnswers([])
+      setKioskState('questions')
+    } catch (caughtError) {
+      setError(caughtError instanceof Error ? caughtError.message : 'Unable to start kiosk session.')
+    } finally {
+      setKioskLoading(false)
+    }
+  }
+
+  const submitKioskAnswer = async () => {
+    const question = kioskQuestions[kioskCurrentIdx]
+    if (!question || !kioskSessionToken) return
+    setKioskLoading(true)
+    try {
+      let answer: unknown = kioskCurrentAnswer
+      if (question.questionType === 'star') answer = kioskStarValue
+      else if (question.questionType === 'scale') answer = kioskSliderValue
+      else if (question.questionType === 'multiple') answer = kioskMultiAnswers
+      else if (question.questionType === 'boolean') answer = kioskCurrentAnswer === 'yes'
+      const qKey = question.templateKey ?? `iq-${question.id}`
+      await fetch('/api/kiosk/answer', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sessionToken: kioskSessionToken, questionKey: qKey, answer }),
+      })
+      const nextIdx = kioskCurrentIdx + 1
+      if (nextIdx < kioskQuestions.length) {
+        setKioskCurrentIdx(nextIdx)
+        setKioskCurrentAnswer('')
+        setKioskStarValue(0)
+        setKioskSliderValue(5)
+        setKioskMultiAnswers([])
+      } else {
+        const demoQs = kioskQuestions.filter((q) => q.isDemographic)
+        if (demoQs.length > 0) {
+          setKioskState('demographics')
+          setKioskDemoIdx(0)
+        } else {
+          await completeKiosk({})
+        }
+      }
+    } finally {
+      setKioskLoading(false)
+    }
+  }
+
+  const completeKiosk = async (demoData: Record<string, string>) => {
+    if (!kioskSessionToken) return
+    await fetch('/api/kiosk/complete', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionToken: kioskSessionToken, demographicData: demoData }),
+    })
+    setKioskState('thankyou')
+    setKioskCountdown(10)
+  }
+
   if (loading) {
     return <div className="mx-auto flex min-h-screen max-w-6xl items-center justify-center px-6">Loading foundation scaffold…</div>
   }
@@ -549,6 +812,36 @@ function App() {
   }
 
   return (
+    <Routes>
+      <Route path="/kiosk" element={<KioskFullScreen
+        institution={selectedInstitution}
+        kioskState={kioskState}
+        kioskLoading={kioskLoading}
+        kioskQuestions={kioskQuestions}
+        kioskCurrentIdx={kioskCurrentIdx}
+        kioskCurrentAnswer={kioskCurrentAnswer}
+        kioskStarValue={kioskStarValue}
+        kioskSliderValue={kioskSliderValue}
+        kioskMultiAnswers={kioskMultiAnswers}
+        kioskDemoIdx={kioskDemoIdx}
+        kioskDemoAnswers={kioskDemoAnswers}
+        kioskCountdown={kioskCountdown}
+        error={error}
+        onStart={() => void startKiosk()}
+        onAnswer={setKioskCurrentAnswer}
+        onStarChange={setKioskStarValue}
+        onSliderChange={setKioskSliderValue}
+        onMultiToggle={(opt) => setKioskMultiAnswers((current) => current.includes(opt) ? current.filter((o) => o !== opt) : [...current, opt])}
+        onSubmitAnswer={() => void submitKioskAnswer()}
+        onDemoAnswer={(key, val) => setKioskDemoAnswers((current) => ({ ...current, [key]: val }))}
+        onComplete={() => void completeKiosk(kioskDemoAnswers)}
+        onDemoNext={() => {
+          const demoQs = kioskQuestions.filter((q) => q.isDemographic)
+          if (kioskDemoIdx + 1 < demoQs.length) setKioskDemoIdx((i) => i + 1)
+          else void completeKiosk(kioskDemoAnswers)
+        }}
+      />} />
+      <Route path="*" element={
     <div className="min-h-screen bg-slate-50 text-slate-900">
       <header className="border-b border-slate-200 bg-white/90 backdrop-blur">
         <div className="mx-auto flex max-w-6xl flex-col gap-4 px-6 py-6 lg:flex-row lg:items-end lg:justify-between">
@@ -556,7 +849,7 @@ function App() {
             <p className="text-sm font-semibold uppercase tracking-[0.2em] text-sky-700">Foundation scaffold</p>
             <h1 className="mt-2 text-3xl font-semibold tracking-tight md:text-4xl">{bootstrap.app.name}</h1>
             <p className="mt-3 max-w-3xl text-slate-600">
-              PWA shell, Docker baseline, readiness probe, kiosk controls, demographics question bank, and aggregate-only root analytics.
+              PWA shell, Docker baseline, readiness probe, kiosk controls, question bank, kiosk runtime, analytics, and root dashboard.
             </p>
           </div>
           <div className="rounded-2xl border border-slate-200 bg-slate-950 px-4 py-3 text-sm text-slate-100 shadow-lg shadow-slate-900/10">
@@ -569,9 +862,10 @@ function App() {
           <NavLink className={navClass} to="/auth-core">Auth core</NavLink>
           <NavLink className={navClass} to="/profile">Profile</NavLink>
           <NavLink className={navClass} to="/institutions">Institutions</NavLink>
-          <NavLink className={navClass} to="/kiosk">Kiosk</NavLink>
+          <NavLink className={navClass} to="/kiosk">Kiosk preview</NavLink>
           <NavLink className={navClass} to="/root">Root</NavLink>
-          <NavLink className={navClass} to="/demographics">Demographics</NavLink>
+          <NavLink className={navClass} to="/questions">Questions</NavLink>
+          <NavLink className={navClass} to="/analytics">Analytics</NavLink>
           <NavLink className={navClass} to="/smtp">SMTP</NavLink>
         </div>
       </header>
@@ -806,15 +1100,19 @@ function App() {
             element={
               <section className="grid gap-6 lg:grid-cols-[1.1fr_0.9fr]">
                 <article className={statCardClass}>
-                  <h2 className="text-xl font-semibold">Kiosk foundation</h2>
+                  <h2 className="text-xl font-semibold">Kiosk preview</h2>
                   <p className="mt-2 text-sm text-slate-600">
-                    The public kiosk path is reserved for institution-local scheduling and question flow. The seeded institution already carries its own timezone and kiosk flag.
+                    Use the full-screen kiosk at <code>/kiosk</code>. Below is a preview of kiosk status for the selected institution.
                   </p>
                   {selectedInstitution ? (
                     <div className="mt-5 grid gap-3 text-sm text-slate-700">
                       <div className="rounded-xl bg-slate-50 px-4 py-3">
                         <div className="font-medium text-slate-900">Institution</div>
                         <div>{selectedInstitution.name}</div>
+                      </div>
+                      <div className="rounded-xl bg-slate-50 px-4 py-3">
+                        <div className="font-medium text-slate-900">Kiosk mode</div>
+                        <div>{selectedInstitution.kioskModeEnabled ? 'Enabled' : 'Disabled'}</div>
                       </div>
                       <div className="rounded-xl bg-slate-50 px-4 py-3">
                         <div className="font-medium text-slate-900">Current local time</div>
@@ -824,11 +1122,17 @@ function App() {
                   ) : null}
                 </article>
                 <article className={statCardClass}>
-                  <h2 className="text-xl font-semibold">Reserved route</h2>
+                  <h2 className="text-xl font-semibold">Launch kiosk</h2>
                   <div className="mt-4 rounded-2xl bg-slate-950 px-5 py-6 text-sm text-slate-200">
                     <div className="font-semibold text-emerald-300">/kiosk</div>
-                    <p className="mt-2">Ready for the institution-scoped kiosk experience in the next implementation steps.</p>
+                    <p className="mt-2">Navigate to the kiosk route for the full-screen patient feedback experience.</p>
                   </div>
+                  <a
+                    href="/kiosk"
+                    className="mt-4 inline-block rounded-full bg-sky-700 px-5 py-2.5 text-sm font-semibold text-white shadow-lg shadow-sky-700/20"
+                  >
+                    Open full-screen kiosk
+                  </a>
                 </article>
               </section>
             }
@@ -845,52 +1149,195 @@ function App() {
                       <div className="mt-2 text-3xl font-semibold">{rootOverview?.institutionUserCount ?? '—'}</div>
                     </div>
                     <div className="rounded-xl bg-slate-50 px-4 py-4">
-                      <div className="text-sm text-slate-500">Responses</div>
-                      <div className="mt-2 text-3xl font-semibold">{rootOverview?.responseCount ?? '—'}</div>
+                      <div className="text-sm text-slate-500">Total responses</div>
+                      <div className="mt-2 text-3xl font-semibold">{rootOverview?.totalResponseCount ?? rootOverview?.responseCount ?? '—'}</div>
                     </div>
                     <div className="rounded-xl bg-slate-50 px-4 py-4">
                       <div className="text-sm text-slate-500">Kiosk-enabled institutions</div>
                       <div className="mt-2 text-3xl font-semibold">{rootOverview?.kioskEnabledCount ?? '—'}</div>
                     </div>
                     <div className="rounded-xl bg-slate-50 px-4 py-4">
-                      <div className="text-sm text-slate-500">Trendlines</div>
-                      <div className="mt-2 text-lg font-semibold text-slate-700">Disabled by requirement</div>
+                      <div className="text-sm text-slate-500">Active questions</div>
+                      <div className="mt-2 text-3xl font-semibold">{rootOverview?.totalActiveQuestions ?? '—'}</div>
+                    </div>
+                    <div className="rounded-xl bg-slate-50 px-4 py-4">
+                      <div className="text-sm text-slate-500">Kiosk sessions today</div>
+                      <div className="mt-2 text-3xl font-semibold">{rootOverview?.kioskSessionsToday ?? '—'}</div>
+                    </div>
+                    <div className="rounded-xl bg-slate-50 px-4 py-4">
+                      <div className="text-sm text-slate-500">Kiosk sessions total</div>
+                      <div className="mt-2 text-3xl font-semibold">{rootOverview?.kioskSessionsTotal ?? '—'}</div>
                     </div>
                   </div>
                 </article>
                 <article className={statCardClass}>
-                  <h2 className="text-xl font-semibold">Privacy guardrail</h2>
-                   <p className="mt-3 text-sm text-slate-600">
-                     Root sees high-level counts only. Institution-level detail and trendlines stay out of this dashboard until requirements change.
-                   </p>
-                   {!rootOverview ? (
-                     <p className="mt-3 text-sm text-amber-700">Root login is required to load aggregate metrics.</p>
-                   ) : null}
+                  <h2 className="text-xl font-semibold">Institution health</h2>
+                  {!rootOverview ? (
+                    <p className="mt-3 text-sm text-amber-700">Root login is required to load aggregate metrics.</p>
+                  ) : (
+                    <div className="mt-4 overflow-x-auto">
+                      <table className="w-full text-sm text-slate-700">
+                        <thead>
+                          <tr className="border-b border-slate-200 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">
+                            <th className="pb-2 pr-4">Institution</th>
+                            <th className="pb-2 pr-4">Kiosk</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100">
+                          {bootstrap.institutions.map((inst) => (
+                            <tr key={inst.id}>
+                              <td className="py-2 pr-4 font-medium">{inst.name}</td>
+                              <td className="py-2 pr-4">
+                                <span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${inst.kioskModeEnabled ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-100 text-slate-600'}`}>
+                                  {inst.kioskModeEnabled ? 'On' : 'Off'}
+                                </span>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                  <p className="mt-4 text-sm text-slate-500">
+                    Root sees high-level counts only. Trendlines disabled by requirement.
+                  </p>
                 </article>
               </section>
             }
           />
           <Route
-            path="/demographics"
+            path="/questions"
             element={
-              <section className="grid gap-4">
-                {bootstrap.demographics.map((question) => (
-                  <article className={statCardClass} key={question.templateKey}>
-                    <div className="flex flex-wrap items-center gap-3">
-                      <h2 className="text-xl font-semibold">{question.prompt}</h2>
-                      <span className="rounded-full bg-sky-100 px-3 py-1 text-xs font-semibold uppercase tracking-[0.15em] text-sky-800">
-                        {question.questionType}
-                      </span>
-                    </div>
-                    <ul className="mt-4 flex flex-wrap gap-2 text-sm text-slate-700">
-                      {question.options.map((option) => (
-                        <li className="rounded-full border border-slate-200 bg-slate-50 px-3 py-2" key={option}>
-                          {option}
-                        </li>
+              <section className="grid gap-6">
+                <div className="flex items-center justify-between">
+                  <h2 className="text-xl font-semibold">Institution questions</h2>
+                  {selectedInstitution && authToken ? (
+                    <button
+                      className="rounded-full bg-sky-700 px-4 py-2 text-sm font-semibold text-white"
+                      onClick={() => void loadInstitutionQuestions(selectedInstitution.id, authToken)}
+                      type="button"
+                    >
+                      Reload
+                    </button>
+                  ) : null}
+                </div>
+                {!authToken ? (
+                  <p className="text-sm text-amber-700">Login required to manage questions.</p>
+                ) : (
+                  <>
+                    {institutionQuestions.length === 0 && selectedInstitution ? (
+                      <button
+                        className="w-fit rounded-full bg-slate-900 px-5 py-2.5 text-sm font-semibold text-white"
+                        onClick={() => void loadInstitutionQuestions(selectedInstitution.id, authToken)}
+                        type="button"
+                      >
+                        Load questions
+                      </button>
+                    ) : null}
+                    <div className="grid gap-3">
+                      {institutionQuestions.map((question) => (
+                        <article className={statCardClass} key={question.id}>
+                          <div className="flex flex-wrap items-start justify-between gap-3">
+                            <div className="flex-1">
+                              <div className="flex flex-wrap items-center gap-2">
+                                <span className="font-semibold text-slate-900">{question.prompt}</span>
+                                <span className="rounded-full bg-sky-100 px-2 py-0.5 text-xs font-semibold uppercase tracking-wide text-sky-800">{question.questionType}</span>
+                                {question.isDemographic ? (
+                                  <span className="rounded-full bg-purple-100 px-2 py-0.5 text-xs font-semibold text-purple-800">Demographic</span>
+                                ) : null}
+                                {question.includeInKiosk ? (
+                                  <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-semibold text-emerald-800">In kiosk</span>
+                                ) : null}
+                              </div>
+                              {question.options.length > 0 ? (
+                                <ul className="mt-2 flex flex-wrap gap-1 text-xs text-slate-600">
+                                  {question.options.map((opt) => (
+                                    <li className="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5" key={opt}>{opt}</li>
+                                  ))}
+                                </ul>
+                              ) : null}
+                            </div>
+                            <div className="flex gap-2">
+                              <button
+                                className="rounded-full bg-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-700"
+                                onClick={() => void toggleQuestionKiosk(question).catch((err: unknown) => setError(err instanceof Error ? err.message : 'Update failed.'))}
+                                type="button"
+                              >
+                                {question.includeInKiosk ? 'Remove from kiosk' : 'Add to kiosk'}
+                              </button>
+                              {!question.templateKey || question.templateKey.startsWith('custom-') ? (
+                                <button
+                                  className="rounded-full bg-red-100 px-3 py-1.5 text-xs font-semibold text-red-700"
+                                  onClick={() => void deleteQuestion(question).catch((err: unknown) => setError(err instanceof Error ? err.message : 'Delete failed.'))}
+                                  type="button"
+                                >
+                                  Delete
+                                </button>
+                              ) : null}
+                            </div>
+                          </div>
+                        </article>
                       ))}
-                    </ul>
-                  </article>
-                ))}
+                    </div>
+                    <article className={statCardClass}>
+                      <h2 className="text-lg font-semibold">Create custom question</h2>
+                      <form className="mt-4 grid gap-4" onSubmit={(event) => void createCustomQuestion(event).catch((err: unknown) => setError(err instanceof Error ? err.message : 'Create failed.'))}>
+                        <div className="grid gap-4 sm:grid-cols-2">
+                          <label className="grid gap-2 text-sm font-medium">
+                            Type
+                            <select className="rounded-xl border border-slate-300 px-3 py-2" name="questionType">
+                              {(bootstrap.questionTypes ?? ['text', 'single', 'multiple', 'scale', 'boolean', 'star']).map((t) => (
+                                <option key={t} value={t}>{t}</option>
+                              ))}
+                            </select>
+                          </label>
+                          <label className="grid gap-2 text-sm font-medium">
+                            Display order
+                            <input className="rounded-xl border border-slate-300 px-3 py-2" defaultValue="0" name="displayOrder" type="number" />
+                          </label>
+                        </div>
+                        <label className="grid gap-2 text-sm font-medium">
+                          Prompt
+                          <input className="rounded-xl border border-slate-300 px-3 py-2" name="prompt" placeholder="Enter the question text" required />
+                        </label>
+                        <label className="grid gap-2 text-sm font-medium">
+                          Options (comma-separated, for single/multiple types)
+                          <input className="rounded-xl border border-slate-300 px-3 py-2" name="options" placeholder="Option A, Option B, Option C" />
+                        </label>
+                        <div className="flex gap-6 text-sm">
+                          <label className="flex items-center gap-2 font-medium">
+                            <input name="includeInKiosk" type="hidden" value="false" />
+                            <input name="includeInKiosk" type="checkbox" value="true" />
+                            Include in kiosk
+                          </label>
+                          <label className="flex items-center gap-2 font-medium">
+                            <input name="isDemographic" type="hidden" value="false" />
+                            <input name="isDemographic" type="checkbox" value="true" />
+                            Demographic
+                          </label>
+                        </div>
+                        <details className="rounded-xl border border-slate-200 px-4 py-3 text-sm">
+                          <summary className="cursor-pointer font-medium">Schedule (optional)</summary>
+                          <div className="mt-3 grid gap-3 sm:grid-cols-3">
+                            <label className="grid gap-2 font-medium">
+                              Days (0=Sun…6=Sat, comma-sep)
+                              <input className="rounded-xl border border-slate-300 px-3 py-2" name="scheduleDays" placeholder="0,1,2,3,4,5,6" />
+                            </label>
+                            <label className="grid gap-2 font-medium">
+                              Start time (HH:MM)
+                              <input className="rounded-xl border border-slate-300 px-3 py-2" name="scheduleStartTime" placeholder="08:00" type="time" />
+                            </label>
+                            <label className="grid gap-2 font-medium">
+                              End time (HH:MM)
+                              <input className="rounded-xl border border-slate-300 px-3 py-2" name="scheduleEndTime" placeholder="18:00" type="time" />
+                            </label>
+                          </div>
+                        </details>
+                        <button className="w-fit rounded-full bg-slate-900 px-5 py-2.5 text-sm font-semibold text-white" type="submit">Create question</button>
+                      </form>
+                    </article>
+                  </>
+                )}
               </section>
             }
           />
@@ -941,6 +1388,29 @@ function App() {
                       <p className="text-sm text-amber-700">Root login is required to view or edit SMTP settings.</p>
                     ) : null}
                   </form>
+                  <div className="mt-6 border-t border-slate-200 pt-5">
+                    <h3 className="text-base font-semibold">Send test email</h3>
+                    <div className="mt-3 flex flex-wrap gap-3">
+                      <input
+                        className="min-w-48 flex-1 rounded-xl border border-slate-300 px-3 py-2 text-sm"
+                        placeholder="recipient@example.com"
+                        type="email"
+                        value={smtpTestAddress}
+                        onChange={(event) => setSmtpTestAddress(event.target.value)}
+                      />
+                      <button
+                        className="rounded-full bg-slate-900 px-4 py-2 text-sm font-semibold text-white"
+                        disabled={!smtpTestAddress}
+                        onClick={() => void sendSmtpTestEmail()}
+                        type="button"
+                      >
+                        Send test
+                      </button>
+                    </div>
+                    {smtpTestResult ? (
+                      <p className="mt-2 text-sm text-emerald-700">{smtpTestResult}</p>
+                    ) : null}
+                  </div>
                 </article>
                 <article className={statCardClass}>
                   <h2 className="text-xl font-semibold">Current status</h2>
@@ -962,6 +1432,193 @@ function App() {
                       <dd>{smtpSettings?.secureLoginType ?? 'Not set'}</dd>
                     </div>
                   </dl>
+                </article>
+              </section>
+            }
+          />
+          <Route
+            path="/analytics"
+            element={
+              <section className="grid gap-6">
+                <article className={statCardClass}>
+                  <div className="flex flex-wrap items-end justify-between gap-4">
+                    <h2 className="text-xl font-semibold">Analytics</h2>
+                    <div className="flex flex-wrap items-end gap-3">
+                      <label className="grid gap-1 text-xs font-medium text-slate-600">
+                        From
+                        <input
+                          className="rounded-xl border border-slate-300 px-3 py-1.5 text-sm"
+                          type="date"
+                          value={analyticsFrom}
+                          onChange={(event) => setAnalyticsFrom(event.target.value)}
+                        />
+                      </label>
+                      <label className="grid gap-1 text-xs font-medium text-slate-600">
+                        To
+                        <input
+                          className="rounded-xl border border-slate-300 px-3 py-1.5 text-sm"
+                          type="date"
+                          value={analyticsTo}
+                          onChange={(event) => setAnalyticsTo(event.target.value)}
+                        />
+                      </label>
+                      {selectedInstitution && authToken ? (
+                        <button
+                          className="rounded-full bg-sky-700 px-4 py-2 text-sm font-semibold text-white"
+                          onClick={() => void loadAnalytics(selectedInstitution.id, authToken)}
+                          type="button"
+                        >
+                          Refresh
+                        </button>
+                      ) : null}
+                    </div>
+                  </div>
+                  {!authToken ? (
+                    <p className="mt-4 text-sm text-amber-700">Login required to view analytics.</p>
+                  ) : !analyticsData ? (
+                    selectedInstitution && authToken ? (
+                      <button
+                        className="mt-4 w-fit rounded-full bg-slate-900 px-5 py-2.5 text-sm font-semibold text-white"
+                        onClick={() => void loadAnalytics(selectedInstitution.id, authToken)}
+                        type="button"
+                      >
+                        Load analytics
+                      </button>
+                    ) : null
+                  ) : (
+                    <div className="mt-5 grid gap-6">
+                      <div className="grid gap-4 sm:grid-cols-3">
+                        <div className="rounded-xl bg-slate-50 px-4 py-4">
+                          <div className="text-sm text-slate-500">Total responses</div>
+                          <div className="mt-2 text-3xl font-semibold">{analyticsData.totalResponses}</div>
+                        </div>
+                        <div className="rounded-xl bg-slate-50 px-4 py-4">
+                          <div className="text-sm text-slate-500">Questions with data</div>
+                          <div className="mt-2 text-3xl font-semibold">{analyticsData.responsesByQuestion.length}</div>
+                        </div>
+                        <div className="rounded-xl bg-slate-50 px-4 py-4">
+                          <div className="text-sm text-slate-500">Days with activity</div>
+                          <div className="mt-2 text-3xl font-semibold">{analyticsData.responsesPerDay.length}</div>
+                        </div>
+                      </div>
+                      {analyticsData.responsesPerDay.length > 0 ? (
+                        <div>
+                          <h3 className="text-sm font-semibold text-slate-700">Responses per day</h3>
+                          <div className="mt-3 flex items-end gap-1" style={{ height: '120px' }}>
+                            {(() => {
+                              const maxCount = Math.max(...analyticsData.responsesPerDay.map((d) => d.count), 1)
+                              return analyticsData.responsesPerDay.map((day) => (
+                                <div key={day.date} className="flex flex-1 flex-col items-center gap-1" title={`${day.date}: ${day.count}`}>
+                                  <div
+                                    className="w-full rounded-t bg-sky-500"
+                                    style={{ height: `${(day.count / maxCount) * 100}px` }}
+                                  />
+                                  <span className="hidden text-[10px] text-slate-400 sm:block" style={{ writingMode: 'vertical-lr', transform: 'rotate(180deg)', maxHeight: '32px', overflow: 'hidden' }}>
+                                    {day.date.slice(5)}
+                                  </span>
+                                </div>
+                              ))
+                            })()}
+                          </div>
+                        </div>
+                      ) : null}
+                      {analyticsData.responsesByQuestion.map((qData) => (
+                        <details className="rounded-xl border border-slate-200 px-4 py-3" key={qData.questionKey}>
+                          <summary className="cursor-pointer font-medium text-slate-900">
+                            {qData.prompt} <span className="ml-2 text-xs text-slate-400">{qData.questionType}</span>
+                          </summary>
+                          <div className="mt-3">
+                            {qData.responses.map((resp) => {
+                              const maxR = Math.max(...qData.responses.map((r) => r.count), 1)
+                              return (
+                                <div className="mt-2 grid grid-cols-[1fr_3fr_auto] items-center gap-3 text-sm" key={resp.answer}>
+                                  <span className="truncate text-slate-700">{resp.answer}</span>
+                                  <div className="h-4 rounded-full bg-slate-100">
+                                    <div
+                                      className="h-full rounded-full bg-sky-500 transition-all"
+                                      style={{ width: `${(resp.count / maxR) * 100}%` }}
+                                    />
+                                  </div>
+                                  <span className="text-xs text-slate-500">{resp.count}</span>
+                                </div>
+                              )
+                            })}
+                          </div>
+                        </details>
+                      ))}
+                      {analyticsData.demographicBreakdown.length > 0 ? (
+                        <div>
+                          <h3 className="mb-3 text-sm font-semibold text-slate-700">Demographic breakdown</h3>
+                          {analyticsData.demographicBreakdown.map((demo) => (
+                            <details className="rounded-xl border border-slate-200 px-4 py-3" key={demo.questionKey}>
+                              <summary className="cursor-pointer font-medium text-slate-900">{demo.prompt}</summary>
+                              <ul className="mt-2 flex flex-wrap gap-2 text-sm">
+                                {demo.responses.map((r) => (
+                                  <li className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1" key={r.answer}>
+                                    {r.answer}: <strong>{r.count}</strong>
+                                  </li>
+                                ))}
+                              </ul>
+                            </details>
+                          ))}
+                        </div>
+                      ) : null}
+                    </div>
+                  )}
+                </article>
+                <article className={statCardClass}>
+                  <h2 className="text-xl font-semibold">Cross-tabulation</h2>
+                  <p className="mt-2 text-sm text-slate-500">Counts under 5 are hidden for privacy.</p>
+                  <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                    <label className="grid gap-2 text-sm font-medium">
+                      Primary question key
+                      <input
+                        className="rounded-xl border border-slate-300 px-3 py-2"
+                        placeholder="e.g. overall-experience"
+                        value={crossTabPrimary}
+                        onChange={(event) => setCrossTabPrimary(event.target.value)}
+                      />
+                    </label>
+                    <label className="grid gap-2 text-sm font-medium">
+                      Demographic key
+                      <input
+                        className="rounded-xl border border-slate-300 px-3 py-2"
+                        placeholder="e.g. age-group"
+                        value={crossTabDemo}
+                        onChange={(event) => setCrossTabDemo(event.target.value)}
+                      />
+                    </label>
+                  </div>
+                  <button
+                    className="mt-3 rounded-full bg-slate-900 px-4 py-2 text-sm font-semibold text-white"
+                    disabled={!crossTabPrimary || !crossTabDemo}
+                    onClick={() => void loadCrossTab()}
+                    type="button"
+                  >
+                    Run cross-tab
+                  </button>
+                  {crossTabData ? (
+                    <div className="mt-4 overflow-x-auto">
+                      <table className="w-full text-sm text-slate-700">
+                        <thead>
+                          <tr className="border-b border-slate-200 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">
+                            <th className="pb-2 pr-4">Primary answer</th>
+                            <th className="pb-2 pr-4">Demographic</th>
+                            <th className="pb-2">Count</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100">
+                          {crossTabData.map((cell, index) => (
+                            <tr key={index}>
+                              <td className="py-2 pr-4">{cell.primaryAnswer}</td>
+                              <td className="py-2 pr-4">{cell.demoAnswer}</td>
+                              <td className="py-2">{cell.count}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  ) : null}
                 </article>
               </section>
             }
@@ -1010,6 +1667,8 @@ function App() {
         </div>
       </footer>
     </div>
+      } />
+    </Routes>
   )
 }
 
@@ -1052,3 +1711,230 @@ function MagicLinkHandler({ onSession }: { onSession: (token: string, user: Auth
 }
 
 export default App
+
+type KioskFullScreenProps = {
+  institution: Institution | null
+  kioskState: 'landing' | 'questions' | 'demographics' | 'thankyou'
+  kioskLoading: boolean
+  kioskQuestions: Question[]
+  kioskCurrentIdx: number
+  kioskCurrentAnswer: string
+  kioskStarValue: number
+  kioskSliderValue: number
+  kioskMultiAnswers: string[]
+  kioskDemoIdx: number
+  kioskDemoAnswers: Record<string, string>
+  kioskCountdown: number
+  error: string | null
+  onStart: () => void
+  onAnswer: (val: string) => void
+  onStarChange: (val: number) => void
+  onSliderChange: (val: number) => void
+  onMultiToggle: (opt: string) => void
+  onSubmitAnswer: () => void
+  onDemoAnswer: (key: string, val: string) => void
+  onComplete: () => void
+  onDemoNext: () => void
+}
+
+function KioskFullScreen(props: KioskFullScreenProps) {
+  const {
+    institution, kioskState, kioskLoading, kioskQuestions, kioskCurrentIdx,
+    kioskCurrentAnswer, kioskStarValue, kioskSliderValue, kioskMultiAnswers,
+    kioskDemoIdx, kioskDemoAnswers, kioskCountdown, error,
+    onStart, onAnswer, onStarChange, onSliderChange, onMultiToggle,
+    onSubmitAnswer, onDemoAnswer, onComplete, onDemoNext,
+  } = props
+
+  const currentQuestion = kioskQuestions[kioskCurrentIdx] ?? null
+  const demoQuestions = kioskQuestions.filter((q) => q.isDemographic)
+  const currentDemoQ = demoQuestions[kioskDemoIdx] ?? null
+
+  return (
+    <div className="flex min-h-screen flex-col items-center justify-center bg-slate-900 px-6 text-white">
+      {kioskLoading ? (
+        <div className="flex flex-col items-center gap-4">
+          <div className="h-12 w-12 animate-spin rounded-full border-4 border-sky-500 border-t-transparent" />
+          <p className="text-slate-300">Please wait…</p>
+        </div>
+      ) : kioskState === 'landing' ? (
+        <div className="flex flex-col items-center gap-8 text-center">
+          <div>
+            <p className="text-sm font-semibold uppercase tracking-[0.2em] text-sky-400">Patient feedback</p>
+            <h1 className="mt-3 text-4xl font-semibold tracking-tight md:text-5xl">{institution?.name ?? 'Quick Glimpse'}</h1>
+            <p className="mt-4 max-w-md text-lg text-slate-300">Share your experience with us. Your feedback helps us improve our service.</p>
+          </div>
+          {error ? (
+            <p className="rounded-xl border border-amber-500 bg-amber-900/40 px-4 py-3 text-amber-200">{error}</p>
+          ) : null}
+          <button
+            className="rounded-full bg-sky-600 px-10 py-4 text-xl font-semibold shadow-2xl shadow-sky-500/30 transition hover:bg-sky-500"
+            onClick={onStart}
+            type="button"
+          >
+            Start feedback
+          </button>
+          <a href="/" className="text-sm text-slate-500 underline underline-offset-4">Return to dashboard</a>
+        </div>
+      ) : kioskState === 'questions' && currentQuestion ? (
+        <div className="w-full max-w-xl">
+          <div className="mb-6 text-center text-sm text-slate-400">
+            Question {kioskCurrentIdx + 1} of {kioskQuestions.length}
+          </div>
+          <div className="rounded-3xl bg-slate-800 px-8 py-8">
+            <h2 className="text-2xl font-semibold leading-snug">{currentQuestion.prompt}</h2>
+            <div className="mt-6">
+              {currentQuestion.questionType === 'star' ? (
+                <div className="flex gap-3">
+                  {[1, 2, 3, 4, 5].map((star) => (
+                    <button
+                      key={star}
+                      className={`text-4xl transition ${kioskStarValue >= star ? 'text-amber-400' : 'text-slate-600'}`}
+                      onClick={() => onStarChange(star)}
+                      type="button"
+                    >
+                      ★
+                    </button>
+                  ))}
+                </div>
+              ) : currentQuestion.questionType === 'scale' ? (
+                <div>
+                  <input
+                    className="w-full accent-sky-500"
+                    max="10"
+                    min="1"
+                    type="range"
+                    value={kioskSliderValue}
+                    onChange={(event) => onSliderChange(Number(event.target.value))}
+                  />
+                  <div className="mt-2 flex justify-between text-sm text-slate-400">
+                    <span>1 — Poor</span>
+                    <span className="text-2xl font-semibold text-white">{kioskSliderValue}</span>
+                    <span>10 — Excellent</span>
+                  </div>
+                </div>
+              ) : currentQuestion.questionType === 'boolean' ? (
+                <div className="flex gap-4">
+                  {['yes', 'no'].map((opt) => (
+                    <button
+                      key={opt}
+                      className={`flex-1 rounded-2xl py-4 text-lg font-semibold transition ${kioskCurrentAnswer === opt ? 'bg-sky-600 text-white' : 'bg-slate-700 text-slate-200 hover:bg-slate-600'}`}
+                      onClick={() => onAnswer(opt)}
+                      type="button"
+                    >
+                      {opt === 'yes' ? 'Yes' : 'No'}
+                    </button>
+                  ))}
+                </div>
+              ) : currentQuestion.questionType === 'multiple' ? (
+                <div className="flex flex-wrap gap-3">
+                  {currentQuestion.options.map((opt) => (
+                    <button
+                      key={opt}
+                      className={`rounded-full px-5 py-2.5 font-medium transition ${kioskMultiAnswers.includes(opt) ? 'bg-sky-600 text-white' : 'bg-slate-700 text-slate-200 hover:bg-slate-600'}`}
+                      onClick={() => onMultiToggle(opt)}
+                      type="button"
+                    >
+                      {opt}
+                    </button>
+                  ))}
+                </div>
+              ) : currentQuestion.questionType === 'single' ? (
+                <div className="flex flex-col gap-3">
+                  {currentQuestion.options.map((opt) => (
+                    <button
+                      key={opt}
+                      className={`rounded-2xl px-5 py-3 text-left font-medium transition ${kioskCurrentAnswer === opt ? 'bg-sky-600 text-white' : 'bg-slate-700 text-slate-200 hover:bg-slate-600'}`}
+                      onClick={() => onAnswer(opt)}
+                      type="button"
+                    >
+                      {opt}
+                    </button>
+                  ))}
+                </div>
+              ) : (
+                <textarea
+                  className="w-full rounded-2xl bg-slate-700 px-4 py-3 text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-sky-500"
+                  placeholder="Type your answer here…"
+                  rows={4}
+                  value={kioskCurrentAnswer}
+                  onChange={(event) => onAnswer(event.target.value)}
+                />
+              )}
+            </div>
+            <div className="mt-6 flex justify-end">
+              <button
+                className="rounded-full bg-sky-600 px-8 py-3 font-semibold transition hover:bg-sky-500"
+                onClick={onSubmitAnswer}
+                type="button"
+              >
+                {kioskCurrentIdx + 1 < kioskQuestions.length ? 'Next →' : 'Continue'}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : kioskState === 'demographics' && currentDemoQ ? (
+        <div className="w-full max-w-xl">
+          <div className="mb-6 text-center text-sm text-slate-400">
+            About you — {kioskDemoIdx + 1} of {demoQuestions.length}
+          </div>
+          <div className="rounded-3xl bg-slate-800 px-8 py-8">
+            <h2 className="text-2xl font-semibold leading-snug">{currentDemoQ.prompt}</h2>
+            <div className="mt-6">
+              {currentDemoQ.questionType === 'single' || currentDemoQ.options.length > 0 ? (
+                <div className="flex flex-col gap-3">
+                  {currentDemoQ.options.map((opt) => (
+                    <button
+                      key={opt}
+                      className={`rounded-2xl px-5 py-3 text-left font-medium transition ${kioskDemoAnswers[currentDemoQ.templateKey ?? `iq-${currentDemoQ.id}`] === opt ? 'bg-sky-600 text-white' : 'bg-slate-700 text-slate-200 hover:bg-slate-600'}`}
+                      onClick={() => onDemoAnswer(currentDemoQ.templateKey ?? `iq-${currentDemoQ.id}`, opt)}
+                      type="button"
+                    >
+                      {opt}
+                    </button>
+                  ))}
+                </div>
+              ) : (
+                <input
+                  className="w-full rounded-2xl bg-slate-700 px-4 py-3 text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-sky-500"
+                  placeholder="Your answer"
+                  value={kioskDemoAnswers[currentDemoQ.templateKey ?? `iq-${currentDemoQ.id}`] ?? ''}
+                  onChange={(event) => onDemoAnswer(currentDemoQ.templateKey ?? `iq-${currentDemoQ.id}`, event.target.value)}
+                />
+              )}
+            </div>
+            <div className="mt-6 flex justify-between">
+              <button
+                className="rounded-full bg-slate-700 px-6 py-3 font-semibold transition hover:bg-slate-600"
+                onClick={onDemoNext}
+                type="button"
+              >
+                Skip
+              </button>
+              <button
+                className="rounded-full bg-sky-600 px-8 py-3 font-semibold transition hover:bg-sky-500"
+                onClick={onDemoNext}
+                type="button"
+              >
+                {kioskDemoIdx + 1 < demoQuestions.length ? 'Next →' : 'Finish'}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : kioskState === 'thankyou' ? (
+        <div className="flex flex-col items-center gap-6 text-center">
+          <div className="flex h-24 w-24 items-center justify-center rounded-full bg-emerald-900/50 text-5xl">✓</div>
+          <h1 className="text-3xl font-semibold">Thank you!</h1>
+          <p className="max-w-sm text-slate-300">Your feedback has been recorded. This screen will reset in {kioskCountdown} second{kioskCountdown !== 1 ? 's' : ''}.</p>
+          <button
+            className="mt-2 rounded-full bg-slate-700 px-6 py-2.5 text-sm font-semibold transition hover:bg-slate-600"
+            onClick={onComplete}
+            type="button"
+          >
+            Done now
+          </button>
+        </div>
+      ) : null}
+    </div>
+  )
+}

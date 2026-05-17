@@ -5,7 +5,7 @@ import { existsSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import { z } from 'zod';
 import { authenticateSession, changeOwnPassword, confirmPasswordReset, ensureSeedCredentials, listUsers, loginUser, logoutSession, registerUser, toggle2FA, updateUserEmail, updateUserStatus, userRoles, userStatuses, verifyMagicLinkChallenge, verifyOtpChallenge, verifyTurnstileToken, } from './auth.js';
-import { buildBootstrapPayload, confirmEmailVerification, createInstitution, createInstitutionUser, createLoginChallenge, deleteInstitution, getInstitution, getRootOverview, getSmtpSettings, listInstitutions, listInstitutionUsers, requestEmailVerification, requestPasswordReset, toggleInstitutionKioskMode, updateInstitution, updateSmtpSettings, } from './services.js';
+import { buildBootstrapPayload, confirmEmailVerification, createCustomQuestion, createInstitution, createInstitutionUser, createLoginChallenge, deleteCustomQuestion, deleteInstitution, getInstitution, getInstitutionAnalytics, getInstitutionQuestions, getCrossTabulation, getKioskStatus, getRootOverview, getSmtpSettings, listInstitutions, listInstitutionUsers, listQuestionTemplates, requestEmailVerification, requestPasswordReset, sendTestSmtpEmail, startKioskSession, submitKioskAnswer, completeKioskSession, toggleInstitutionKioskMode, updateInstitution, updateInstitutionQuestion, updateSmtpSettings, } from './services.js';
 import { config } from './config.js';
 import { getDb } from './db.js';
 getDb();
@@ -78,6 +78,34 @@ const createInstitutionUserSchema = z.object({
     email: z.string().email(),
     password: z.string().min(10),
     role: z.enum(['institution_admin', 'institution_user']).default('institution_user'),
+});
+const updateQuestionSchema = z.object({
+    includeInKiosk: z.boolean().optional(),
+    isDemographic: z.boolean().optional(),
+    displayOrder: z.number().int().optional(),
+    scheduleDays: z.array(z.number().int().min(0).max(6)).optional(),
+    scheduleStartTime: z.string().regex(/^\d{2}:\d{2}$/).nullable().optional(),
+    scheduleEndTime: z.string().regex(/^\d{2}:\d{2}$/).nullable().optional(),
+});
+const createQuestionSchema = z.object({
+    questionType: z.enum(['single', 'multiple', 'text', 'scale', 'boolean', 'star']),
+    prompt: z.string().trim().min(1),
+    options: z.array(z.string()).default([]),
+    includeInKiosk: z.boolean().default(true),
+    isDemographic: z.boolean().default(false),
+    displayOrder: z.number().int().default(0),
+});
+const kioskAnswerSchema = z.object({
+    sessionToken: z.string().min(1),
+    questionKey: z.string().min(1),
+    answer: z.unknown(),
+});
+const kioskCompleteSchema = z.object({
+    sessionToken: z.string().min(1),
+    demographicData: z.record(z.string(), z.string()).default({}),
+});
+const smtpTestSchema = z.object({
+    toAddress: z.string().email(),
 });
 const webDistPath = path.resolve(import.meta.dirname, '../../web/dist');
 const devMode = !config.turnstile.secretKey;
@@ -156,8 +184,13 @@ export function createApp() {
         res.setHeader('x-frame-options', 'DENY');
         res.setHeader('referrer-policy', 'no-referrer');
         res.setHeader('permissions-policy', 'camera=(), microphone=(), geolocation=()');
+        res.setHeader('content-security-policy', "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; font-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'");
+        res.setHeader('strict-transport-security', 'max-age=31536000; includeSubDomains');
+        res.setHeader('cross-origin-opener-policy', 'same-origin');
+        res.setHeader('cross-origin-resource-policy', 'same-origin');
         if (req.path.startsWith('/api/')) {
             res.setHeader('cache-control', 'no-store');
+            res.setHeader('x-robots-tag', 'noindex');
         }
         next();
     });
@@ -600,6 +633,202 @@ export function createApp() {
         }
         catch (error) {
             return res.status(400).json({ error: error instanceof Error ? error.message : 'Unable to create user.' });
+        }
+    });
+    app.get('/api/institutions/:id/questions', privilegedOpsLimiter, (req, res) => {
+        const auth = getAuthenticatedSession(req, res);
+        if (!auth)
+            return;
+        if (!['root', 'institution_admin'].includes(auth.session.user.role)) {
+            return res.status(403).json({ error: 'Admin access required.' });
+        }
+        const institutionId = parseNumericId(req.params.id);
+        if (!institutionId)
+            return res.status(400).json({ error: 'Invalid institution id.' });
+        if (auth.session.user.role === 'institution_admin' && auth.session.user.institutionId !== institutionId) {
+            return res.status(403).json({ error: 'Institution-scoped access required.' });
+        }
+        return res.json({ questions: getInstitutionQuestions(institutionId) });
+    });
+    app.patch('/api/institutions/:id/questions/:questionId', privilegedOpsLimiter, (req, res) => {
+        const auth = getAuthenticatedSession(req, res);
+        if (!auth)
+            return;
+        if (!['root', 'institution_admin'].includes(auth.session.user.role)) {
+            return res.status(403).json({ error: 'Admin access required.' });
+        }
+        const institutionId = parseNumericId(req.params.id);
+        const questionId = parseNumericId(req.params.questionId);
+        if (!institutionId || !questionId)
+            return res.status(400).json({ error: 'Invalid id.' });
+        if (auth.session.user.role === 'institution_admin' && auth.session.user.institutionId !== institutionId) {
+            return res.status(403).json({ error: 'Institution-scoped access required.' });
+        }
+        const parsed = updateQuestionSchema.safeParse(req.body);
+        if (!parsed.success)
+            return res.status(400).json({ error: 'Invalid question update payload.' });
+        try {
+            const question = updateInstitutionQuestion(institutionId, questionId, parsed.data);
+            return res.json(question);
+        }
+        catch (error) {
+            return res.status(404).json({ error: error instanceof Error ? error.message : 'Unable to update question.' });
+        }
+    });
+    app.post('/api/institutions/:id/questions', privilegedOpsLimiter, (req, res) => {
+        const auth = getAuthenticatedSession(req, res);
+        if (!auth)
+            return;
+        if (!['root', 'institution_admin'].includes(auth.session.user.role)) {
+            return res.status(403).json({ error: 'Admin access required.' });
+        }
+        const institutionId = parseNumericId(req.params.id);
+        if (!institutionId)
+            return res.status(400).json({ error: 'Invalid institution id.' });
+        if (auth.session.user.role === 'institution_admin' && auth.session.user.institutionId !== institutionId) {
+            return res.status(403).json({ error: 'Institution-scoped access required.' });
+        }
+        const parsed = createQuestionSchema.safeParse(req.body);
+        if (!parsed.success)
+            return res.status(400).json({ error: 'Invalid question payload.' });
+        try {
+            const question = createCustomQuestion(institutionId, parsed.data);
+            return res.status(201).json(question);
+        }
+        catch (error) {
+            return res.status(400).json({ error: error instanceof Error ? error.message : 'Unable to create question.' });
+        }
+    });
+    app.delete('/api/institutions/:id/questions/:questionId', privilegedOpsLimiter, (req, res) => {
+        const auth = getAuthenticatedSession(req, res);
+        if (!auth)
+            return;
+        if (!['root', 'institution_admin'].includes(auth.session.user.role)) {
+            return res.status(403).json({ error: 'Admin access required.' });
+        }
+        const institutionId = parseNumericId(req.params.id);
+        const questionId = parseNumericId(req.params.questionId);
+        if (!institutionId || !questionId)
+            return res.status(400).json({ error: 'Invalid id.' });
+        if (auth.session.user.role === 'institution_admin' && auth.session.user.institutionId !== institutionId) {
+            return res.status(403).json({ error: 'Institution-scoped access required.' });
+        }
+        try {
+            deleteCustomQuestion(institutionId, questionId);
+            return res.status(204).send();
+        }
+        catch (error) {
+            const msg = error instanceof Error ? error.message : '';
+            return res.status(msg === 'Question not found.' ? 404 : 400).json({ error: msg || 'Unable to delete question.' });
+        }
+    });
+    app.get('/api/institutions/:id/analytics', privilegedOpsLimiter, (req, res) => {
+        const auth = getAuthenticatedSession(req, res);
+        if (!auth)
+            return;
+        if (!['root', 'institution_admin'].includes(auth.session.user.role)) {
+            return res.status(403).json({ error: 'Admin access required.' });
+        }
+        const institutionId = parseNumericId(req.params.id);
+        if (!institutionId)
+            return res.status(400).json({ error: 'Invalid institution id.' });
+        if (auth.session.user.role === 'institution_admin' && auth.session.user.institutionId !== institutionId) {
+            return res.status(403).json({ error: 'Institution-scoped access required.' });
+        }
+        const from = typeof req.query.from === 'string' ? req.query.from : undefined;
+        const to = typeof req.query.to === 'string' ? req.query.to : undefined;
+        return res.json(getInstitutionAnalytics(institutionId, { from, to }));
+    });
+    app.get('/api/institutions/:id/analytics/cross-tab', privilegedOpsLimiter, (req, res) => {
+        const auth = getAuthenticatedSession(req, res);
+        if (!auth)
+            return;
+        if (!['root', 'institution_admin'].includes(auth.session.user.role)) {
+            return res.status(403).json({ error: 'Admin access required.' });
+        }
+        const institutionId = parseNumericId(req.params.id);
+        if (!institutionId)
+            return res.status(400).json({ error: 'Invalid institution id.' });
+        if (auth.session.user.role === 'institution_admin' && auth.session.user.institutionId !== institutionId) {
+            return res.status(403).json({ error: 'Institution-scoped access required.' });
+        }
+        const primaryKey = typeof req.query.primaryKey === 'string' ? req.query.primaryKey : null;
+        const demographicKey = typeof req.query.demographicKey === 'string' ? req.query.demographicKey : null;
+        if (!primaryKey || !demographicKey) {
+            return res.status(400).json({ error: 'primaryKey and demographicKey are required.' });
+        }
+        return res.json(getCrossTabulation(institutionId, primaryKey, demographicKey));
+    });
+    app.get('/api/kiosk/:slug/status', (req, res) => {
+        const slug = Array.isArray(req.params.slug) ? req.params.slug[0] : req.params.slug;
+        if (!slug)
+            return res.status(400).json({ error: 'Invalid slug.' });
+        const status = getKioskStatus(slug);
+        if (!status)
+            return res.status(404).json({ error: 'Institution not found.' });
+        return res.json(status);
+    });
+    app.post('/api/kiosk/:slug/session', authChallengeLimiter, (req, res) => {
+        const slug = Array.isArray(req.params.slug) ? req.params.slug[0] : req.params.slug;
+        if (!slug)
+            return res.status(400).json({ error: 'Invalid slug.' });
+        const status = getKioskStatus(slug);
+        if (!status)
+            return res.status(404).json({ error: 'Institution not found.' });
+        try {
+            const session = startKioskSession(status.institutionId);
+            return res.status(201).json(session);
+        }
+        catch (error) {
+            return res.status(403).json({ error: error instanceof Error ? error.message : 'Unable to start kiosk session.' });
+        }
+    });
+    app.post('/api/kiosk/answer', authChallengeLimiter, (req, res) => {
+        const parsed = kioskAnswerSchema.safeParse(req.body);
+        if (!parsed.success)
+            return res.status(400).json({ error: 'Invalid answer payload.' });
+        try {
+            submitKioskAnswer(parsed.data.sessionToken, parsed.data.questionKey, JSON.stringify(parsed.data.answer));
+            return res.json({ recorded: true });
+        }
+        catch (error) {
+            return res.status(400).json({ error: error instanceof Error ? error.message : 'Unable to record answer.' });
+        }
+    });
+    app.post('/api/kiosk/complete', authChallengeLimiter, (req, res) => {
+        const parsed = kioskCompleteSchema.safeParse(req.body);
+        if (!parsed.success)
+            return res.status(400).json({ error: 'Invalid complete payload.' });
+        try {
+            completeKioskSession(parsed.data.sessionToken, parsed.data.demographicData);
+            return res.json({ completed: true });
+        }
+        catch (error) {
+            return res.status(400).json({ error: error instanceof Error ? error.message : 'Unable to complete session.' });
+        }
+    });
+    app.get('/api/question-templates', privilegedOpsLimiter, (req, res) => {
+        const auth = getAuthenticatedSession(req, res);
+        if (!auth)
+            return;
+        return res.json({ templates: listQuestionTemplates() });
+    });
+    app.post('/api/settings/smtp/test', privilegedOpsLimiter, async (req, res) => {
+        const auth = getAuthenticatedSession(req, res);
+        if (!auth)
+            return;
+        if (auth.session.user.role !== 'root') {
+            return res.status(403).json({ error: 'Root access required.' });
+        }
+        const parsed = smtpTestSchema.safeParse(req.body);
+        if (!parsed.success)
+            return res.status(400).json({ error: 'Invalid test email payload.' });
+        try {
+            const result = await sendTestSmtpEmail(parsed.data.toAddress);
+            return res.json(result);
+        }
+        catch (error) {
+            return res.status(500).json({ error: error instanceof Error ? error.message : 'Failed to send test email.' });
         }
     });
     // --- Magic link redirect for SPA (before static files)
