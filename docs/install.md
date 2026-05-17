@@ -24,7 +24,7 @@ All variables are optional; defaults are shown in the **Default** column.
 | `TURNSTILE_SITE_KEY` | _(empty)_ | Cloudflare Turnstile site key — set in production |
 | `TURNSTILE_SECRET_KEY` | _(empty)_ | Cloudflare Turnstile secret key — when absent, dev-bypass mode is active |
 | `TURNSTILE_DEV_BYPASS_TOKEN` | `dev-turnstile-pass` | Token accepted in place of a real Turnstile token when `TURNSTILE_SECRET_KEY` is unset |
-| `APP_VERSION` | `0.1.0` | Reported by `/readyz` |
+| `APP_VERSION` | `0.2.0` | Reported by `/readyz` |
 
 > **SMTP settings** are stored in the database (not env vars) and are configured at runtime via the root admin UI or `PUT /api/settings/smtp`. See the [technical reference](technical.md) for the full field set.
 

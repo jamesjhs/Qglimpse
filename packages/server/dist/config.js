@@ -7,7 +7,7 @@ const dataDir = process.env.QUICKGLIMPSE_DATA_DIR
 mkdirSync(dataDir, { recursive: true });
 export const config = {
     appName: 'Quick Glimpse',
-    version: process.env.APP_VERSION ?? '0.1.0',
+    version: process.env.APP_VERSION ?? '0.2.0',
     port: Number(process.env.PORT ?? 3000),
     baseUrl: process.env.QUICKGLIMPSE_BASE_URL ?? `http://localhost:${process.env.PORT ?? 3000}`,
     dataDir,

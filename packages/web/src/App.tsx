@@ -808,7 +808,7 @@ function App() {
   }
 
   if (loading) {
-    return <div className="mx-auto flex min-h-screen max-w-6xl items-center justify-center px-6">Loading foundation scaffold…</div>
+    return <div className="mx-auto flex min-h-screen max-w-6xl items-center justify-center px-6">Loading Quick Glimpse…</div>
   }
 
   if (!bootstrap) {
@@ -850,27 +850,41 @@ function App() {
       <header className="border-b border-slate-200 bg-white/90 backdrop-blur">
         <div className="mx-auto flex max-w-6xl flex-col gap-4 px-6 py-6 lg:flex-row lg:items-end lg:justify-between">
           <div>
-            <p className="text-sm font-semibold uppercase tracking-[0.2em] text-sky-700">Foundation scaffold</p>
+            <p className="text-sm font-semibold uppercase tracking-[0.2em] text-sky-700">Visitor feedback platform</p>
             <h1 className="mt-2 text-3xl font-semibold tracking-tight md:text-4xl">{bootstrap.app.name}</h1>
             <p className="mt-3 max-w-3xl text-slate-600">
-              PWA shell, Docker baseline, readiness probe, kiosk controls, question bank, kiosk runtime, analytics, and root dashboard.
+              Quick Glimpse helps organizations capture in-person feedback quickly with kiosk surveys, secure sign-in, and easy analytics.
             </p>
           </div>
           <div className="rounded-2xl border border-slate-200 bg-slate-950 px-4 py-3 text-sm text-slate-100 shadow-lg shadow-slate-900/10">
             <div>Version {bootstrap.app.version}</div>
-            <div>Current step: {bootstrap.roadmapSnapshot.currentStep}</div>
+            <div>Always-on feedback insights</div>
           </div>
         </div>
         <div className="mx-auto flex w-full max-w-6xl gap-2 overflow-x-auto px-6 pb-6">
-          <NavLink className={navClass} to="/">Overview</NavLink>
-          <NavLink className={navClass} to="/auth-core">Auth core</NavLink>
-          <NavLink className={navClass} to="/profile">Profile</NavLink>
-          <NavLink className={navClass} to="/institutions">Institutions</NavLink>
-          <NavLink className={navClass} to="/kiosk">Kiosk preview</NavLink>
-          <NavLink className={navClass} to="/root">Root</NavLink>
-          <NavLink className={navClass} to="/questions">Questions</NavLink>
-          <NavLink className={navClass} to="/analytics">Analytics</NavLink>
-          <NavLink className={navClass} to="/smtp">SMTP</NavLink>
+          {!sessionUser ? (
+            <>
+              <NavLink className={navClass} to="/">Home</NavLink>
+              <NavLink className={navClass} to="/auth-core">Sign in</NavLink>
+              <NavLink className={navClass} to="/kiosk">Kiosk preview</NavLink>
+            </>
+          ) : (
+            <>
+              <NavLink className={navClass} to="/">Overview</NavLink>
+              <NavLink className={navClass} to="/auth-core">Auth core</NavLink>
+              <NavLink className={navClass} to="/profile">Profile</NavLink>
+              <NavLink className={navClass} to="/institutions">Institutions</NavLink>
+              <NavLink className={navClass} to="/kiosk">Kiosk preview</NavLink>
+              <NavLink className={navClass} to="/questions">Questions</NavLink>
+              <NavLink className={navClass} to="/analytics">Analytics</NavLink>
+              {sessionUser.role === 'root' ? (
+                <>
+                  <NavLink className={navClass} to="/root">Root</NavLink>
+                  <NavLink className={navClass} to="/smtp">SMTP</NavLink>
+                </>
+              ) : null}
+            </>
+          )}
         </div>
       </header>
 
@@ -880,54 +894,84 @@ function App() {
           <Route
             path="/"
             element={
-              <div className="grid gap-6">
-                <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-                  <article className={statCardClass}>
-                    <p className="text-sm font-medium text-slate-500">Institutions</p>
-                    <p className="mt-3 text-3xl font-semibold">{bootstrap.institutions.length}</p>
-                    <p className="mt-2 text-sm text-slate-600">Institution-local timezone support starts with the seeded sample institution.</p>
-                  </article>
-                  <article className={statCardClass}>
-                    <p className="text-sm font-medium text-slate-500">Kiosk-enabled</p>
-                    <p className="mt-3 text-3xl font-semibold">{bootstrap.institutions.filter((item) => item.kioskModeEnabled).length}</p>
-                    <p className="mt-2 text-sm text-slate-600">Institutional users can toggle kiosk mode without involving root.</p>
-                  </article>
-                  <article className={statCardClass}>
-                    <p className="text-sm font-medium text-slate-500">Demographic prompts</p>
-                    <p className="mt-3 text-3xl font-semibold">{bootstrap.demographics.length}</p>
-                    <p className="mt-2 text-sm text-slate-600">Seeded from the confirmed question bank.</p>
-                  </article>
-                  <article className={statCardClass}>
-                    <p className="text-sm font-medium text-slate-500">Readiness endpoint</p>
-                    <p className="mt-3 text-xl font-semibold">{bootstrap.app.readyz}</p>
-                    <p className="mt-2 text-sm text-slate-600">Used by Docker and production health checks.</p>
-                  </article>
-                </section>
-                <section className="grid gap-6 lg:grid-cols-[1.4fr_1fr]">
-                  <article className={statCardClass}>
-                    <h2 className="text-xl font-semibold">Foundation checklist</h2>
-                    <ul className="mt-4 grid gap-3 text-sm text-slate-700">
-                      {bootstrap.foundationChecklist.map((item) => (
-                        <li key={item} className="flex gap-3 rounded-xl bg-slate-50 px-3 py-3">
-                          <span className="mt-0.5 text-emerald-600">●</span>
-                          <span>{item}</span>
-                        </li>
-                      ))}
-                    </ul>
-                  </article>
-                  <article className={statCardClass}>
-                    <h2 className="text-xl font-semibold">Auth delivery choices</h2>
-                    <div className="mt-4 grid gap-3 text-sm text-slate-700">
-                      {bootstrap.authOptions.map((option) => (
-                        <div key={option.id} className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
-                          <div className="font-medium text-slate-900">{option.label}</div>
-                          <p className="mt-1">{option.description}</p>
-                        </div>
-                      ))}
+              !sessionUser ? (
+                <div className="grid gap-6">
+                  <section className={statCardClass}>
+                    <h2 className="text-2xl font-semibold">Understand every visitor interaction in minutes</h2>
+                    <p className="mt-3 max-w-3xl text-slate-700">
+                      Quick Glimpse is a simple feedback platform for reception desks, clinics, campuses, and service counters.
+                      Launch a kiosk, collect responses, and turn them into clear day-by-day insights.
+                    </p>
+                    <div className="mt-5 flex flex-wrap gap-3">
+                      <NavLink className="rounded-full bg-slate-900 px-5 py-2.5 text-sm font-semibold text-white" to="/auth-core">Sign in</NavLink>
+                      <NavLink className="rounded-full bg-slate-200 px-5 py-2.5 text-sm font-semibold text-slate-900" to="/kiosk">View kiosk experience</NavLink>
                     </div>
-                  </article>
-                </section>
-              </div>
+                  </section>
+                  <section className="grid gap-4 md:grid-cols-3">
+                    <article className={statCardClass}>
+                      <h3 className="text-lg font-semibold">Fast kiosk surveys</h3>
+                      <p className="mt-2 text-sm text-slate-700">Collect quick answers from visitors with one-question-at-a-time flows designed for shared devices.</p>
+                    </article>
+                    <article className={statCardClass}>
+                      <h3 className="text-lg font-semibold">Flexible question formats</h3>
+                      <p className="mt-2 text-sm text-slate-700">Use ratings, yes/no prompts, multiple choice, text responses, and more to fit your service model.</p>
+                    </article>
+                    <article className={statCardClass}>
+                      <h3 className="text-lg font-semibold">Clear reporting</h3>
+                      <p className="mt-2 text-sm text-slate-700">Review trends and response patterns with privacy-safe analytics that support better operational decisions.</p>
+                    </article>
+                  </section>
+                </div>
+              ) : (
+                <div className="grid gap-6">
+                  <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+                    <article className={statCardClass}>
+                      <p className="text-sm font-medium text-slate-500">Institutions</p>
+                      <p className="mt-3 text-3xl font-semibold">{bootstrap.institutions.length}</p>
+                      <p className="mt-2 text-sm text-slate-600">Institution-local timezone support starts with the seeded sample institution.</p>
+                    </article>
+                    <article className={statCardClass}>
+                      <p className="text-sm font-medium text-slate-500">Kiosk-enabled</p>
+                      <p className="mt-3 text-3xl font-semibold">{bootstrap.institutions.filter((item) => item.kioskModeEnabled).length}</p>
+                      <p className="mt-2 text-sm text-slate-600">Institutional users can toggle kiosk mode without involving root.</p>
+                    </article>
+                    <article className={statCardClass}>
+                      <p className="text-sm font-medium text-slate-500">Demographic prompts</p>
+                      <p className="mt-3 text-3xl font-semibold">{bootstrap.demographics.length}</p>
+                      <p className="mt-2 text-sm text-slate-600">Seeded from the confirmed question bank.</p>
+                    </article>
+                    <article className={statCardClass}>
+                      <p className="text-sm font-medium text-slate-500">Question formats</p>
+                      <p className="mt-3 text-xl font-semibold">{(bootstrap.questionTypes ?? ['single', 'multiple', 'text', 'scale', 'boolean', 'star']).length}</p>
+                      <p className="mt-2 text-sm text-slate-600">Configured feedback styles available for live kiosks.</p>
+                    </article>
+                  </section>
+                  <section className="grid gap-6 lg:grid-cols-[1.4fr_1fr]">
+                    <article className={statCardClass}>
+                      <h2 className="text-xl font-semibold">Platform capabilities</h2>
+                      <ul className="mt-4 grid gap-3 text-sm text-slate-700">
+                        {bootstrap.foundationChecklist.map((item) => (
+                          <li key={item} className="flex gap-3 rounded-xl bg-slate-50 px-3 py-3">
+                            <span className="mt-0.5 text-emerald-600">●</span>
+                            <span>{item}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    </article>
+                    <article className={statCardClass}>
+                      <h2 className="text-xl font-semibold">Auth delivery choices</h2>
+                      <div className="mt-4 grid gap-3 text-sm text-slate-700">
+                        {bootstrap.authOptions.map((option) => (
+                          <div key={option.id} className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
+                            <div className="font-medium text-slate-900">{option.label}</div>
+                            <p className="mt-1">{option.description}</p>
+                          </div>
+                        ))}
+                      </div>
+                    </article>
+                  </section>
+                </div>
+              )
             }
           />
           <Route
@@ -935,33 +979,31 @@ function App() {
             element={
               <section className="grid gap-6">
                 <article className={statCardClass}>
-                  <h2 className="text-xl font-semibold">Turnstile + auth core controls</h2>
+                  <h2 className="text-xl font-semibold">Secure account access</h2>
                   <p className="mt-2 text-sm text-slate-600">
-                    Step 2 adds registration, password login, bearer sessions, root-seeded accounts, and account lifecycle status updates.
+                    Sign in with your account credentials and complete one-time verification when prompted.
                   </p>
-                  <label className="mt-4 grid gap-2 text-sm font-medium md:max-w-lg">
-                    Turnstile token (dev bypass in local mode)
-                    <input className="rounded-xl border border-slate-300 px-3 py-2" value={turnstileToken} onChange={(event) => setTurnstileToken(event.target.value)} />
-                  </label>
                 </article>
                 <div className="grid gap-6 lg:grid-cols-2">
-                  <article className={statCardClass}>
-                    <h2 className="text-xl font-semibold">Register user</h2>
-                    <form className="mt-4 grid gap-3" onSubmit={(event) => void registerAuthUser(event).catch((caughtError: unknown) => setError(caughtError instanceof Error ? caughtError.message : 'Registration failed.'))}>
-                      <input className="rounded-xl border border-slate-300 px-3 py-2" name="email" placeholder="new-user@example.com" required type="email" />
-                      <input className="rounded-xl border border-slate-300 px-3 py-2" name="password" placeholder="Password (min 10 chars)" required type="password" />
-                      <select className="rounded-xl border border-slate-300 px-3 py-2" name="role" defaultValue="institution_user">
-                        <option value="institution_user">institution_user</option>
-                        <option value="institution_admin">institution_admin</option>
-                      </select>
-                      <input className="rounded-xl border border-slate-300 px-3 py-2" name="institutionId" placeholder="Institution ID (required for non-root)" defaultValue={bootstrap.institutions[0]?.id ?? ''} />
-                      <button className="w-fit rounded-full bg-slate-900 px-5 py-2.5 text-sm font-semibold text-white" type="submit">Register</button>
-                    </form>
-                  </article>
+                  {sessionUser ? (
+                    <article className={statCardClass}>
+                      <h2 className="text-xl font-semibold">Register user</h2>
+                      <form className="mt-4 grid gap-3" onSubmit={(event) => void registerAuthUser(event).catch((caughtError: unknown) => setError(caughtError instanceof Error ? caughtError.message : 'Registration failed.'))}>
+                        <input className="rounded-xl border border-slate-300 px-3 py-2" name="email" placeholder="new-user@example.com" required type="email" />
+                        <input className="rounded-xl border border-slate-300 px-3 py-2" name="password" placeholder="Password (min 10 chars)" required type="password" />
+                        <select className="rounded-xl border border-slate-300 px-3 py-2" name="role" defaultValue="institution_user">
+                          <option value="institution_user">institution_user</option>
+                          <option value="institution_admin">institution_admin</option>
+                        </select>
+                        <input className="rounded-xl border border-slate-300 px-3 py-2" name="institutionId" placeholder="Institution ID" defaultValue={bootstrap.institutions[0]?.id ?? ''} />
+                        <button className="w-fit rounded-full bg-slate-900 px-5 py-2.5 text-sm font-semibold text-white" type="submit">Register</button>
+                      </form>
+                    </article>
+                  ) : null}
                   <article className={statCardClass}>
                     <h2 className="text-xl font-semibold">Login + session</h2>
                     <form className="mt-4 grid gap-3" onSubmit={(event) => void loginAuthUser(event).catch((caughtError: unknown) => setError(caughtError instanceof Error ? caughtError.message : 'Login failed.'))}>
-                      <input className="rounded-xl border border-slate-300 px-3 py-2" name="email" placeholder="root@quickglimpse.local" required type="email" />
+                      <input className="rounded-xl border border-slate-300 px-3 py-2" name="email" placeholder="you@example.com" required type="email" />
                       <input className="rounded-xl border border-slate-300 px-3 py-2" name="password" placeholder="Password" required type="password" />
                       <button className="w-fit rounded-full bg-sky-700 px-5 py-2.5 text-sm font-semibold text-white" type="submit">Login</button>
                     </form>
@@ -973,9 +1015,7 @@ function App() {
                       <div className="mt-4 rounded-xl border border-sky-200 bg-sky-50 px-4 py-4 text-sm">
                         <div className="font-semibold text-sky-900">2FA required</div>
                         <div className="mt-1 text-sky-700">Enter the OTP sent to {pendingTwoFa.email}</div>
-                        {pendingTwoFa.preview.otpCode ? (
-                          <div className="mt-1 font-mono text-sky-800">Dev preview: {pendingTwoFa.preview.otpCode}</div>
-                        ) : null}
+                        {pendingTwoFa.preview.otpCode ? <div className="mt-1 font-mono text-sky-800">One-time code: {pendingTwoFa.preview.otpCode}</div> : null}
                         <form className="mt-3 flex gap-2" onSubmit={(event) => void verify2FA(event).catch((err: unknown) => setError(err instanceof Error ? err.message : '2FA failed.'))}>
                           <input className="rounded-xl border border-slate-300 px-3 py-2 font-mono" name="code" placeholder="000000" required />
                           <button className="rounded-full bg-sky-700 px-4 py-2 text-sm font-semibold text-white" type="submit">Verify</button>
@@ -1000,7 +1040,8 @@ function App() {
                   </article>
                 </div>
                 <div className="grid gap-6 lg:grid-cols-2">
-                  <article className={statCardClass}>
+                  {sessionUser?.role === 'root' ? (
+                    <article className={statCardClass}>
                     <h2 className="text-xl font-semibold">Account lifecycle (root only)</h2>
                     <button className="mt-4 rounded-full bg-slate-900 px-4 py-2 text-sm font-semibold text-white" onClick={() => void loadAuthUsers().catch((caughtError: unknown) => setError(caughtError instanceof Error ? caughtError.message : 'Unable to load users.'))} type="button">
                       Load users
@@ -1022,9 +1063,10 @@ function App() {
                         </div>
                       ))}
                     </div>
-                  </article>
-                  <article className={statCardClass}>
-                    <h2 className="text-xl font-semibold">Email 2FA delivery demo</h2>
+                    </article>
+                  ) : null}
+                    <article className={statCardClass}>
+                    <h2 className="text-xl font-semibold">Email 2FA delivery options</h2>
                     <form className="mt-4 grid gap-3" onSubmit={(event) => void createChallenge(event)}>
                       <input className="rounded-xl border border-slate-300 px-3 py-2" name="email" placeholder="visitor@example.com" required type="email" />
                       <fieldset className="grid gap-2 text-sm">
@@ -1038,11 +1080,11 @@ function App() {
                           </label>
                         ))}
                       </fieldset>
-                      <button className="w-fit rounded-full bg-slate-900 px-5 py-2.5 text-sm font-semibold text-white" type="submit">Create preview</button>
+                      <button className="w-fit rounded-full bg-slate-900 px-5 py-2.5 text-sm font-semibold text-white" type="submit">Send challenge</button>
                     </form>
                     {challenge ? (
                       <div className="mt-4 rounded-xl bg-slate-50 px-4 py-3 text-sm text-slate-700">
-                        <div className="font-medium text-slate-900">{challenge.method === 'magic_link' ? 'Magic link' : 'One-time code'} preview</div>
+                        <div className="font-medium text-slate-900">{challenge.method === 'magic_link' ? 'Magic link' : 'One-time code'} details</div>
                         <div className="mt-2 break-all">{challenge.preview.magicLink ?? challenge.preview.otpCode}</div>
                       </div>
                     ) : null}
@@ -1666,7 +1708,7 @@ function App() {
       </main>
       <footer className="border-t border-slate-200 bg-white">
         <div className="mx-auto flex max-w-6xl flex-col gap-2 px-6 py-6 text-sm text-slate-600 sm:flex-row sm:items-center sm:justify-between">
-          <span>Quick Glimpse foundation scaffold</span>
+          <span>Quick Glimpse</span>
           <span>Version {bootstrap.app.version}</span>
         </div>
       </footer>
