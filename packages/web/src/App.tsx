@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { FormEvent } from 'react'
-import { NavLink, Route, Routes, useSearchParams } from 'react-router-dom'
+import { Navigate, NavLink, Route, Routes, useSearchParams } from 'react-router-dom'
 
 type Institution = {
   id: number
@@ -192,6 +192,8 @@ function App() {
   const [crossTabPrimary, setCrossTabPrimary] = useState('')
   const [crossTabDemo, setCrossTabDemo] = useState('')
   const [crossTabData, setCrossTabData] = useState<Array<{ primaryAnswer: string; demoAnswer: string; count: number | '< 5' }> | null>(null)
+  const kioskPromptQuestions = useMemo(() => kioskQuestions.filter((q) => !q.isDemographic), [kioskQuestions])
+  const kioskDemographicQuestions = useMemo(() => kioskQuestions.filter((q) => q.isDemographic), [kioskQuestions])
 
   useEffect(() => {
     const load = async () => {
@@ -227,7 +229,15 @@ function App() {
     return () => clearTimeout(timer)
   }, [kioskState, kioskCountdown])
 
-  const selectedInstitution = bootstrap?.institutions[0] ?? null
+  const selectedInstitution = useMemo(() => {
+    if (!bootstrap?.institutions?.length) {
+      return null
+    }
+    if (sessionUser?.institutionId) {
+      return bootstrap.institutions.find((institution) => institution.id === sessionUser.institutionId) ?? bootstrap.institutions[0]
+    }
+    return bootstrap.institutions[0]
+  }, [bootstrap, sessionUser])
   const localTime = useMemo(() => {
     if (!selectedInstitution) return 'Unavailable'
     return new Intl.DateTimeFormat(undefined, {
@@ -744,6 +754,8 @@ function App() {
         throw new Error(result.error ?? 'Unable to start kiosk session.')
       }
       const data = (await response.json()) as { sessionToken: string; questions: Question[] }
+      const hasPromptQuestions = data.questions.some((question) => !question.isDemographic)
+      const hasDemographicQuestions = data.questions.some((question) => question.isDemographic)
       setKioskSessionToken(data.sessionToken)
       setKioskQuestions(data.questions)
       setKioskCurrentIdx(0)
@@ -751,7 +763,9 @@ function App() {
       setKioskStarValue(0)
       setKioskSliderValue(5)
       setKioskMultiAnswers([])
-      setKioskState('questions')
+      setKioskDemoAnswers({})
+      setKioskDemoIdx(0)
+      setKioskState(hasPromptQuestions ? 'questions' : hasDemographicQuestions ? 'demographics' : 'thankyou')
     } catch (caughtError) {
       setError(caughtError instanceof Error ? caughtError.message : 'Unable to start kiosk session.')
     } finally {
@@ -760,7 +774,7 @@ function App() {
   }
 
   const submitKioskAnswer = async () => {
-    const question = kioskQuestions[kioskCurrentIdx]
+    const question = kioskPromptQuestions[kioskCurrentIdx]
     if (!question || !kioskSessionToken) return
     setKioskLoading(true)
     try {
@@ -776,15 +790,14 @@ function App() {
         body: JSON.stringify({ sessionToken: kioskSessionToken, questionKey: qKey, answer }),
       })
       const nextIdx = kioskCurrentIdx + 1
-      if (nextIdx < kioskQuestions.length) {
+      if (nextIdx < kioskPromptQuestions.length) {
         setKioskCurrentIdx(nextIdx)
         setKioskCurrentAnswer('')
         setKioskStarValue(0)
         setKioskSliderValue(5)
         setKioskMultiAnswers([])
       } else {
-        const demoQs = kioskQuestions.filter((q) => q.isDemographic)
-        if (demoQs.length > 0) {
+        if (kioskDemographicQuestions.length > 0) {
           setKioskState('demographics')
           setKioskDemoIdx(0)
         } else {
@@ -793,6 +806,32 @@ function App() {
       }
     } finally {
       setKioskLoading(false)
+    }
+  }
+
+  const advanceKioskDemographic = async (skip: boolean) => {
+    if (!kioskSessionToken) return
+    const currentDemo = kioskDemographicQuestions[kioskDemoIdx]
+    if (!currentDemo) {
+      await completeKiosk(kioskDemoAnswers)
+      return
+    }
+
+    const questionKey = currentDemo.templateKey ?? `iq-${currentDemo.id}`
+    const answer = kioskDemoAnswers[questionKey]
+
+    if (!skip && answer) {
+      await fetch('/api/kiosk/answer', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sessionToken: kioskSessionToken, questionKey, answer }),
+      })
+    }
+
+    if (kioskDemoIdx + 1 < kioskDemographicQuestions.length) {
+      setKioskDemoIdx((i) => i + 1)
+    } else {
+      await completeKiosk(kioskDemoAnswers)
     }
   }
 
@@ -817,7 +856,7 @@ function App() {
 
   return (
     <Routes>
-      <Route path="/kiosk" element={<KioskFullScreen
+      <Route path="/kiosk" element={sessionUser ? <KioskFullScreen
         institution={selectedInstitution}
         kioskState={kioskState}
         kioskLoading={kioskLoading}
@@ -839,12 +878,9 @@ function App() {
         onSubmitAnswer={() => void submitKioskAnswer()}
         onDemoAnswer={(key, val) => setKioskDemoAnswers((current) => ({ ...current, [key]: val }))}
         onComplete={() => void completeKiosk(kioskDemoAnswers)}
-        onDemoNext={() => {
-          const demoQs = kioskQuestions.filter((q) => q.isDemographic)
-          if (kioskDemoIdx + 1 < demoQs.length) setKioskDemoIdx((i) => i + 1)
-          else void completeKiosk(kioskDemoAnswers)
-        }}
-      />} />
+        onDemoSkip={() => void advanceKioskDemographic(true)}
+        onDemoNext={() => void advanceKioskDemographic(false)}
+      /> : <Navigate to="/auth-core" replace />} />
       <Route path="*" element={
     <div className="min-h-screen bg-slate-50 text-slate-900">
       <header className="border-b border-slate-200 bg-white/90 backdrop-blur">
@@ -1701,15 +1737,80 @@ function App() {
             }
           />
           <Route
+            path="/help"
+            element={
+              <section className="grid gap-6">
+                <article className={statCardClass}>
+                  <h2 className="text-xl font-semibold">Help</h2>
+                  <p className="mt-2 text-sm text-slate-700">
+                    Use this page as the central quick-help reference for staff and administrators.
+                  </p>
+                  <ul className="mt-4 list-disc space-y-2 pl-5 text-sm text-slate-700">
+                    <li>Sign in from <code>/auth-core</code> using your institutional account.</li>
+                    <li>Enable kiosk mode from the Institutions view if visitor collection is paused.</li>
+                    <li>Use Analytics for date-range response summaries and demographic cross-tab views.</li>
+                    <li>Use Profile to update password and 2FA.</li>
+                    <li>Root users can manage SMTP settings and institution lifecycle controls.</li>
+                  </ul>
+                </article>
+              </section>
+            }
+          />
+          <Route
+            path="/privacy"
+            element={
+              <section className="grid gap-6">
+                <article className={statCardClass}>
+                  <h2 className="text-xl font-semibold">Privacy policy</h2>
+                  <p className="mt-2 text-sm text-slate-700">
+                    Quick Glimpse is designed for anonymous visitor feedback. Visitor names, direct contact details,
+                    and other direct identifiers are not required in normal kiosk use.
+                  </p>
+                  <ul className="mt-4 list-disc space-y-2 pl-5 text-sm text-slate-700">
+                    <li>Institution and account administration data is stored for service operation.</li>
+                    <li>Visitor feedback responses are stored with anonymous session linkage for analytics only.</li>
+                    <li>Demographic questions are optional and category-based.</li>
+                    <li>Institution administrators control question configuration and display behavior.</li>
+                  </ul>
+                </article>
+              </section>
+            }
+          />
+          <Route
+            path="/dpia"
+            element={
+              <section className="grid gap-6">
+                <article className={statCardClass}>
+                  <h2 className="text-xl font-semibold">Data Protection Impact Assessment (DPIA) summary</h2>
+                  <p className="mt-2 text-sm text-slate-700">
+                    Quick Glimpse minimises data processing by separating administrator account data from anonymous
+                    visitor response data and limiting root-level visibility to aggregate metrics.
+                  </p>
+                  <ul className="mt-4 list-disc space-y-2 pl-5 text-sm text-slate-700">
+                    <li>Purpose limitation: service-quality measurement and operational insight.</li>
+                    <li>Data minimisation: no required direct identifiers for kiosk respondents.</li>
+                    <li>Access controls: role-based authorization and institution scoping.</li>
+                    <li>Security controls: CSP, HSTS, CORP/COOP, session expiry, and rate limiting.</li>
+                  </ul>
+                </article>
+              </section>
+            }
+          />
+          <Route
             path="/magic-link"
             element={<MagicLinkHandler onSession={(token, user) => { setAuthToken(token); setSessionUser(user) }} />}
           />
         </Routes>
       </main>
       <footer className="border-t border-slate-200 bg-white">
-        <div className="mx-auto flex max-w-6xl flex-col gap-2 px-6 py-6 text-sm text-slate-600 sm:flex-row sm:items-center sm:justify-between">
-          <span>Quick Glimpse</span>
-          <span>Version {bootstrap.app.version}</span>
+        <div className="mx-auto flex max-w-6xl flex-col gap-3 px-6 py-6 text-sm text-slate-600 sm:flex-row sm:items-center sm:justify-between">
+          <span>©J Rowson {new Date().getFullYear()} | jahosi.co.uk</span>
+          <div className="flex flex-wrap items-center gap-3">
+            <NavLink className="underline underline-offset-2" to="/help">Help</NavLink>
+            <NavLink className="underline underline-offset-2" to="/privacy">Privacy policy</NavLink>
+            <NavLink className="underline underline-offset-2" to="/dpia">DPIA</NavLink>
+            <span>Version {bootstrap.app.version}</span>
+          </div>
         </div>
       </footer>
     </div>
@@ -1780,6 +1881,7 @@ type KioskFullScreenProps = {
   onSubmitAnswer: () => void
   onDemoAnswer: (key: string, val: string) => void
   onComplete: () => void
+  onDemoSkip: () => void
   onDemoNext: () => void
 }
 
@@ -1789,10 +1891,11 @@ function KioskFullScreen(props: KioskFullScreenProps) {
     kioskCurrentAnswer, kioskStarValue, kioskSliderValue, kioskMultiAnswers,
     kioskDemoIdx, kioskDemoAnswers, kioskCountdown, error,
     onStart, onAnswer, onStarChange, onSliderChange, onMultiToggle,
-    onSubmitAnswer, onDemoAnswer, onComplete, onDemoNext,
+    onSubmitAnswer, onDemoAnswer, onComplete, onDemoSkip, onDemoNext,
   } = props
 
-  const currentQuestion = kioskQuestions[kioskCurrentIdx] ?? null
+  const promptQuestions = kioskQuestions.filter((q) => !q.isDemographic)
+  const currentQuestion = promptQuestions[kioskCurrentIdx] ?? null
   const demoQuestions = kioskQuestions.filter((q) => q.isDemographic)
   const currentDemoQ = demoQuestions[kioskDemoIdx] ?? null
 
@@ -1825,7 +1928,7 @@ function KioskFullScreen(props: KioskFullScreenProps) {
       ) : kioskState === 'questions' && currentQuestion ? (
         <div className="w-full max-w-xl">
           <div className="mb-6 text-center text-sm text-slate-400">
-            Question {kioskCurrentIdx + 1} of {kioskQuestions.length}
+            Question {kioskCurrentIdx + 1} of {promptQuestions.length}
           </div>
           <div className="rounded-3xl bg-slate-800 px-8 py-8">
             <h2 className="text-2xl font-semibold leading-snug">{currentQuestion.prompt}</h2>
@@ -1848,13 +1951,13 @@ function KioskFullScreen(props: KioskFullScreenProps) {
                   <input
                     className="w-full accent-sky-500"
                     max="10"
-                    min="1"
+                    min="0"
                     type="range"
                     value={kioskSliderValue}
                     onChange={(event) => onSliderChange(Number(event.target.value))}
                   />
                   <div className="mt-2 flex justify-between text-sm text-slate-400">
-                    <span>1 — Poor</span>
+                    <span>0 — Poor</span>
                     <span className="text-2xl font-semibold text-white">{kioskSliderValue}</span>
                     <span>10 — Excellent</span>
                   </div>
@@ -1914,7 +2017,7 @@ function KioskFullScreen(props: KioskFullScreenProps) {
                 onClick={onSubmitAnswer}
                 type="button"
               >
-                {kioskCurrentIdx + 1 < kioskQuestions.length ? 'Next →' : 'Continue'}
+                {kioskCurrentIdx + 1 < promptQuestions.length ? 'Next →' : 'Continue'}
               </button>
             </div>
           </div>
@@ -1952,7 +2055,7 @@ function KioskFullScreen(props: KioskFullScreenProps) {
             <div className="mt-6 flex justify-between">
               <button
                 className="rounded-full bg-slate-700 px-6 py-3 font-semibold transition hover:bg-slate-600"
-                onClick={onDemoNext}
+                onClick={onDemoSkip}
                 type="button"
               >
                 Skip

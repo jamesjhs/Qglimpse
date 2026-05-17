@@ -26,6 +26,12 @@ auth.registerUser({
   role: 'institution_admin',
   institutionId: secondInstitutionId,
 })
+auth.registerUser({
+  email: 'west-user@example.com',
+  password: 'Password1234!',
+  role: 'institution_user',
+  institutionId: secondInstitutionId,
+})
 
 const app = createApp()
 const server = app.listen(0)
@@ -121,4 +127,18 @@ test('institution admin can only toggle kiosk mode for own institution', async (
   assert.equal(allowedToggle.response.status, 200)
   assert.equal(allowedToggle.body.id, secondInstitutionId)
   assert.equal(allowedToggle.body.kioskModeEnabled, 1)
+})
+
+test('institution user can view analytics for own institution only', async () => {
+  const westUserToken = await login('west-user@example.com', 'Password1234!')
+
+  const allowedAnalytics = await api(`/api/institutions/${secondInstitutionId}/analytics`, {
+    headers: { Authorization: `Bearer ${westUserToken}` },
+  })
+  assert.equal(allowedAnalytics.response.status, 200)
+
+  const forbiddenAnalytics = await api('/api/institutions/1/analytics', {
+    headers: { Authorization: `Bearer ${westUserToken}` },
+  })
+  assert.equal(forbiddenAnalytics.response.status, 403)
 })

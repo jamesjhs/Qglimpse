@@ -20,6 +20,8 @@ Quick Glimpse is a Docker-contained PWA for institution-specific visitor insight
 - `docs/troubleshooting.md` — common issues and fixes
 - `docs/technical.md` — architecture, schema, API reference, rate limiting, security headers
 - `docs/simple-guide.md` — plain-English guide for non-technical staff
+- `docs/privacy-policy.md` — privacy policy baseline for deployments
+- `docs/dpia.md` — DPIA summary and control mapping
 - `docs/docker-quickstart.md` — local container workflow
 - `docs/production-hardening.md` — deployment hardening checklist
 
@@ -98,8 +100,8 @@ See [docs/technical.md](docs/technical.md) for the full API reference. Key route
 | `GET` | `/api/institutions/:id/users` | Root or institution_admin (own) |
 | `POST` | `/api/institutions/:id/users` | Root or institution_admin (own) |
 | `GET/POST/PATCH/DELETE` | `/api/institutions/:id/questions` | Root or institution_admin (own) |
-| `GET` | `/api/institutions/:id/analytics` | Root or institution_admin (own) |
-| `GET` | `/api/institutions/:id/analytics/cross-tab` | Root or institution_admin (own) |
+| `GET` | `/api/institutions/:id/analytics` | Root or institution user (own) |
+| `GET` | `/api/institutions/:id/analytics/cross-tab` | Root or institution user (own) |
 | `GET/POST` | `/api/kiosk/:slug/session` | Public |
 | `POST` | `/api/kiosk/answer` | Public |
 | `POST` | `/api/kiosk/complete` | Public |
