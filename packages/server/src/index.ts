@@ -2,6 +2,7 @@ import express from 'express'
 import rateLimit from 'express-rate-limit'
 import path from 'node:path'
 import { existsSync } from 'node:fs'
+import { pathToFileURL } from 'node:url'
 import { z } from 'zod'
 import {
   authenticateSession,
@@ -107,9 +108,45 @@ function extractBearerToken(headerValue?: string) {
   return token
 }
 
+function parseNumericId(value: string) {
+  const parsed = Number(value)
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    return null
+  }
+
+  return parsed
+}
+
+function getAuthenticatedSession(req: express.Request, res: express.Response) {
+  const token = extractBearerToken(req.header('authorization'))
+  if (!token) {
+    res.status(401).json({ error: 'Missing bearer token.' })
+    return null
+  }
+
+  const session = authenticateSession(token)
+  if (!session) {
+    res.status(401).json({ error: 'Session is invalid or expired.' })
+    return null
+  }
+
+  return { session, token }
+}
+
 export function createApp() {
   const app = express()
-  app.use(express.json())
+  app.disable('x-powered-by')
+  app.use(express.json({ limit: '50kb' }))
+  app.use((req, res, next) => {
+    res.setHeader('x-content-type-options', 'nosniff')
+    res.setHeader('x-frame-options', 'DENY')
+    res.setHeader('referrer-policy', 'no-referrer')
+    res.setHeader('permissions-policy', 'camera=(), microphone=(), geolocation=()')
+    if (req.path.startsWith('/api/')) {
+      res.setHeader('cache-control', 'no-store')
+    }
+    next()
+  })
 
   app.get('/readyz', (_req, res) => {
     res.json({ status: 'ok', version: config.version, timestamp: new Date().toISOString() })
@@ -120,14 +157,36 @@ export function createApp() {
   })
 
   app.get('/api/root/overview', (_req, res) => {
+    const auth = getAuthenticatedSession(_req, res)
+    if (!auth) {
+      return
+    }
+    if (auth.session.user.role !== 'root') {
+      return res.status(403).json({ error: 'Root access required.' })
+    }
     res.json(getRootOverview())
   })
 
-  app.get('/api/settings/smtp', (_req, res) => {
+  app.get('/api/settings/smtp', (req, res) => {
+    const auth = getAuthenticatedSession(req, res)
+    if (!auth) {
+      return
+    }
+    if (auth.session.user.role !== 'root') {
+      return res.status(403).json({ error: 'Root access required.' })
+    }
     res.json(getSmtpSettings())
   })
 
   app.put('/api/settings/smtp', (req, res) => {
+    const auth = getAuthenticatedSession(req, res)
+    if (!auth) {
+      return
+    }
+    if (auth.session.user.role !== 'root') {
+      return res.status(403).json({ error: 'Root access required.' })
+    }
+
     const parsed = smtpSchema.safeParse(req.body)
     if (!parsed.success) {
       return res.status(400).json({ error: 'Invalid SMTP settings payload.' })
@@ -137,12 +196,29 @@ export function createApp() {
   })
 
   app.post('/api/institutions/:id/kiosk-mode', (req, res) => {
+    const auth = getAuthenticatedSession(req, res)
+    if (!auth) {
+      return
+    }
+    if (!['root', 'institution_admin'].includes(auth.session.user.role)) {
+      return res.status(403).json({ error: 'Admin access required.' })
+    }
+
+    const institutionId = parseNumericId(req.params.id)
+    if (!institutionId) {
+      return res.status(400).json({ error: 'Invalid institution id.' })
+    }
+
+    if (auth.session.user.role === 'institution_admin' && auth.session.user.institutionId !== institutionId) {
+      return res.status(403).json({ error: 'Institution-scoped access required.' })
+    }
+
     const parsed = kioskSchema.safeParse(req.body)
     if (!parsed.success) {
       return res.status(400).json({ error: 'Invalid kiosk mode payload.' })
     }
 
-    const institution = toggleInstitutionKioskMode(Number(req.params.id), parsed.data.enabled)
+    const institution = toggleInstitutionKioskMode(institutionId, parsed.data.enabled)
     if (!institution) {
       return res.status(404).json({ error: 'Institution not found.' })
     }
@@ -206,37 +282,30 @@ export function createApp() {
   })
 
   app.get('/api/auth/session', authCoreLimiter, (req, res) => {
-    const token = extractBearerToken(req.header('authorization'))
-    if (!token) {
-      return res.status(401).json({ error: 'Missing bearer token.' })
+    const auth = getAuthenticatedSession(req, res)
+    if (!auth) {
+      return
     }
 
-    const session = authenticateSession(token)
-    if (!session) {
-      return res.status(401).json({ error: 'Session is invalid or expired.' })
-    }
-
-    return res.json(session)
+    return res.json(auth.session)
   })
 
   app.post('/api/auth/logout', authCoreLimiter, (req, res) => {
-    const token = extractBearerToken(req.header('authorization'))
-    if (!token) {
-      return res.status(401).json({ error: 'Missing bearer token.' })
+    const auth = getAuthenticatedSession(req, res)
+    if (!auth) {
+      return
     }
 
-    logoutSession(token)
+    logoutSession(auth.token)
     return res.status(204).send()
   })
 
   app.get('/api/auth/users', authCoreLimiter, (req, res) => {
-    const token = extractBearerToken(req.header('authorization'))
-    if (!token) {
-      return res.status(401).json({ error: 'Missing bearer token.' })
+    const auth = getAuthenticatedSession(req, res)
+    if (!auth) {
+      return
     }
-
-    const session = authenticateSession(token)
-    if (!session || session.user.role !== 'root') {
+    if (auth.session.user.role !== 'root') {
       return res.status(403).json({ error: 'Root access required.' })
     }
 
@@ -244,14 +313,17 @@ export function createApp() {
   })
 
   app.patch('/api/auth/users/:id/status', authCoreLimiter, (req, res) => {
-    const token = extractBearerToken(req.header('authorization'))
-    if (!token) {
-      return res.status(401).json({ error: 'Missing bearer token.' })
+    const auth = getAuthenticatedSession(req, res)
+    if (!auth) {
+      return
+    }
+    if (auth.session.user.role !== 'root') {
+      return res.status(403).json({ error: 'Root access required.' })
     }
 
-    const session = authenticateSession(token)
-    if (!session || session.user.role !== 'root') {
-      return res.status(403).json({ error: 'Root access required.' })
+    const userId = parseNumericId(req.params.id)
+    if (!userId) {
+      return res.status(400).json({ error: 'Invalid user id.' })
     }
 
     const parsed = updateUserStatusSchema.safeParse(req.body)
@@ -260,7 +332,7 @@ export function createApp() {
     }
 
     try {
-      const user = updateUserStatus(Number(req.params.id), parsed.data.status)
+      const user = updateUserStatus(userId, parsed.data.status)
       return res.json({ user })
     } catch (error) {
       return res.status(400).json({ error: error instanceof Error ? error.message : 'Unable to update user status.' })
@@ -297,7 +369,12 @@ export function createApp() {
   return app
 }
 
-const app = createApp()
-app.listen(config.port, () => {
-  console.log(`Quick Glimpse listening on http://localhost:${config.port}`)
-})
+const isDirectRun =
+  Boolean(process.argv[1]) && import.meta.url === pathToFileURL(process.argv[1] ?? '').href
+
+if (isDirectRun) {
+  const app = createApp()
+  app.listen(config.port, () => {
+    console.log(`Quick Glimpse listening on http://localhost:${config.port}`)
+  })
+}

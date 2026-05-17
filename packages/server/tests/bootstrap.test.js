@@ -14,8 +14,12 @@ const services = await import('../dist/services.js')
 test('bootstrap seeds demographics and aggregate dashboard data', () => {
   const bootstrap = services.buildBootstrapPayload()
   assert.equal(bootstrap.demographics.length, 5)
-  assert.equal(bootstrap.rootOverview.trendlinesEnabled, false)
   assert.equal(bootstrap.authOptions.length, 2)
+})
+
+test('root overview remains aggregate-only', () => {
+  const overview = services.getRootOverview()
+  assert.equal(overview.trendlinesEnabled, false)
 })
 
 test('kiosk mode toggle persists per institution', () => {

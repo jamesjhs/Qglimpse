@@ -12,3 +12,22 @@ Use this scaffold as a starting point, then complete the following before releas
 8. Add audit logging, rate limiting, and abuse protection around authentication endpoints.
 9. Tune CSP, HSTS, cookie, and cache headers at the reverse proxy layer.
 10. Revisit root analytics exposure whenever reporting requirements change.
+
+## Security validation and penetration-test checklist
+
+- Verify unauthenticated requests are denied for all sensitive routes:
+  - `/api/root/overview`
+  - `/api/settings/smtp` (GET/PUT)
+  - `/api/institutions/:id/kiosk-mode`
+- Verify role boundaries:
+  - institution admins cannot access root-only routes
+  - institution admins can only mutate kiosk state for their own institution
+- Replay/abuse checks:
+  - exercise auth and challenge rate limits (`429` paths)
+  - verify suspended/deactivated users cannot create valid sessions
+- Input edge-case checks:
+  - invalid IDs (`/api/institutions/abc/...`, `/api/auth/users/0/status`)
+  - malformed payloads (missing required fields, wrong enums, empty tokens)
+- Session checks:
+  - session invalidation on logout
+  - session invalidation after account suspension/deactivation

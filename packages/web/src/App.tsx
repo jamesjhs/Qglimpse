@@ -28,22 +28,6 @@ type BootstrapPayload = {
   authOptions: Array<{ id: 'email_code' | 'magic_link'; label: string; description: string }>
   institutions: Institution[]
   demographics: Demographic[]
-  rootOverview: {
-    institutionCount: number
-    institutionUserCount: number
-    demographicQuestionCount: number
-    responseCount: number
-    kioskEnabledCount: number
-    trendlinesEnabled: boolean
-  }
-  smtpSettings: {
-    username: string
-    sendAddress: string
-    serverAddress: string
-    port: number
-    secureLoginType: 'none' | 'ssl' | 'starttls'
-    passwordSet: boolean
-  }
   foundationChecklist: string[]
   roadmapSnapshot: {
     currentStep: string
@@ -55,8 +39,25 @@ type BootstrapPayload = {
     userStatuses: Array<'active' | 'suspended' | 'deactivated'>
     turnstileSiteKey: string
     devBypassTokenHint: string | null
-    userCount: number
   }
+}
+
+type RootOverview = {
+  institutionCount: number
+  institutionUserCount: number
+  demographicQuestionCount: number
+  responseCount: number
+  kioskEnabledCount: number
+  trendlinesEnabled: boolean
+}
+
+type SmtpSettings = {
+  username: string
+  sendAddress: string
+  serverAddress: string
+  port: number
+  secureLoginType: 'none' | 'ssl' | 'starttls'
+  passwordSet: boolean
 }
 
 type SmtpFormState = {
@@ -87,7 +88,7 @@ type AuthUser = {
 }
 
 const navClass = ({ isActive }: { isActive: boolean }) =>
-  `rounded-full px-3 py-2 text-sm font-medium transition ${
+  `whitespace-nowrap rounded-full px-3 py-2 text-sm font-medium transition ${
     isActive ? 'bg-slate-900 text-white' : 'text-slate-600 hover:bg-slate-200 hover:text-slate-900'
   }`
 
@@ -103,6 +104,8 @@ function App() {
   const [authToken, setAuthToken] = useState('')
   const [sessionUser, setSessionUser] = useState<AuthUser | null>(null)
   const [authUsers, setAuthUsers] = useState<AuthUser[]>([])
+  const [rootOverview, setRootOverview] = useState<RootOverview | null>(null)
+  const [smtpSettings, setSmtpSettings] = useState<SmtpSettings | null>(null)
   const [turnstileToken, setTurnstileToken] = useState('dev-turnstile-pass')
   const [smtpForm, setSmtpForm] = useState<SmtpFormState>({
     username: '',
@@ -120,14 +123,6 @@ function App() {
         if (!response.ok) throw new Error('Unable to load bootstrap data.')
         const payload = (await response.json()) as BootstrapPayload
         setBootstrap(payload)
-        setSmtpForm({
-          username: payload.smtpSettings.username,
-          password: '',
-          sendAddress: payload.smtpSettings.sendAddress,
-          serverAddress: payload.smtpSettings.serverAddress,
-          port: `${payload.smtpSettings.port}`,
-          secureLoginType: payload.smtpSettings.secureLoginType,
-        })
         setTurnstileToken(payload.authCore.devBypassTokenHint ?? '')
       } catch (caughtError) {
         setError(caughtError instanceof Error ? caughtError.message : 'Unknown error')
@@ -150,11 +145,19 @@ function App() {
   }, [selectedInstitution])
 
   const toggleKioskMode = async (institution: Institution) => {
+    if (!authToken) {
+      setError('Login first to manage kiosk mode.')
+      return
+    }
+
     setError(null)
     try {
       const response = await fetch(`/api/institutions/${institution.id}/kiosk-mode`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          Authorization: `Bearer ${authToken}`,
+          'Content-Type': 'application/json',
+        },
         body: JSON.stringify({ enabled: institution.kioskModeEnabled === 0 }),
       })
 
@@ -172,25 +175,72 @@ function App() {
         return {
           ...current,
           institutions,
-          rootOverview: {
-            ...current.rootOverview,
-            kioskEnabledCount: institutions.filter((item) => item.kioskModeEnabled).length,
-          },
         }
       })
+      setRootOverview((current) =>
+        current
+          ? {
+              ...current,
+              kioskEnabledCount: Math.max(0, current.kioskEnabledCount + updated.kioskModeEnabled - institution.kioskModeEnabled),
+            }
+          : current,
+      )
     } catch (caughtError) {
       setError(caughtError instanceof Error ? caughtError.message : 'Unable to update kiosk mode.')
     }
   }
 
+  const loadRootOverview = async (token: string) => {
+    const response = await fetch('/api/root/overview', {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+    if (!response.ok) {
+      const result = (await response.json()) as { error?: string }
+      throw new Error(result.error ?? 'Unable to load root overview.')
+    }
+    setRootOverview((await response.json()) as RootOverview)
+  }
+
+  const loadSmtpSettings = async (token: string) => {
+    const response = await fetch('/api/settings/smtp', {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+    if (!response.ok) {
+      const result = (await response.json()) as { error?: string }
+      throw new Error(result.error ?? 'Unable to load SMTP settings.')
+    }
+    const settings = (await response.json()) as SmtpSettings
+    setSmtpSettings(settings)
+    setSmtpForm({
+      username: settings.username,
+      password: '',
+      sendAddress: settings.sendAddress,
+      serverAddress: settings.serverAddress,
+      port: `${settings.port}`,
+      secureLoginType: settings.secureLoginType,
+    })
+  }
+
   const saveSmtpSettings = async (event: FormEvent<HTMLFormElement>) => {
+    if (!authToken) {
+      setError('Root session required to manage SMTP settings.')
+      return
+    }
+    if (sessionUser?.role !== 'root') {
+      setError('Root session required to manage SMTP settings.')
+      return
+    }
+
     event.preventDefault()
     setSavingSmtp(true)
     setError(null)
     try {
       const response = await fetch('/api/settings/smtp', {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          Authorization: `Bearer ${authToken}`,
+          'Content-Type': 'application/json',
+        },
         body: JSON.stringify({
           ...smtpForm,
           port: Number(smtpForm.port),
@@ -201,8 +251,8 @@ function App() {
         throw new Error('Unable to save SMTP settings.')
       }
 
-      const smtpSettings = (await response.json()) as BootstrapPayload['smtpSettings']
-      setBootstrap((current) => (current ? { ...current, smtpSettings } : current))
+      const updatedSmtpSettings = (await response.json()) as SmtpSettings
+      setSmtpSettings(updatedSmtpSettings)
       setSmtpForm((current) => ({ ...current, password: '' }))
     } catch (caughtError) {
       setError(caughtError instanceof Error ? caughtError.message : 'Unable to save SMTP settings.')
@@ -280,6 +330,9 @@ function App() {
     const result = (await response.json()) as { token: string; user: AuthUser }
     setAuthToken(result.token)
     setSessionUser(result.user)
+    if (result.user.role === 'root') {
+      await Promise.all([loadRootOverview(result.token), loadSmtpSettings(result.token)])
+    }
   }
 
   const fetchSession = async () => {
@@ -299,6 +352,9 @@ function App() {
 
     const result = (await response.json()) as { user: AuthUser }
     setSessionUser(result.user)
+    if (result.user.role === 'root') {
+      await Promise.all([loadRootOverview(authToken), loadSmtpSettings(authToken)])
+    }
   }
 
   const logoutAuthUser = async () => {
@@ -313,6 +369,8 @@ function App() {
     setAuthToken('')
     setSessionUser(null)
     setAuthUsers([])
+    setRootOverview(null)
+    setSmtpSettings(null)
   }
 
   const loadAuthUsers = async () => {
@@ -371,7 +429,7 @@ function App() {
         <div className="mx-auto flex max-w-6xl flex-col gap-4 px-6 py-6 lg:flex-row lg:items-end lg:justify-between">
           <div>
             <p className="text-sm font-semibold uppercase tracking-[0.2em] text-sky-700">Foundation scaffold</p>
-            <h1 className="mt-2 text-4xl font-semibold tracking-tight">{bootstrap.app.name}</h1>
+            <h1 className="mt-2 text-3xl font-semibold tracking-tight md:text-4xl">{bootstrap.app.name}</h1>
             <p className="mt-3 max-w-3xl text-slate-600">
               PWA shell, Docker baseline, readiness probe, kiosk controls, demographics question bank, and aggregate-only root analytics.
             </p>
@@ -381,7 +439,7 @@ function App() {
             <div>Current step: {bootstrap.roadmapSnapshot.currentStep}</div>
           </div>
         </div>
-        <div className="mx-auto flex max-w-6xl flex-wrap gap-2 px-6 pb-6">
+        <div className="mx-auto flex w-full max-w-6xl gap-2 overflow-x-auto px-6 pb-6">
           <NavLink className={navClass} to="/">Overview</NavLink>
           <NavLink className={navClass} to="/auth-core">Auth core</NavLink>
           <NavLink className={navClass} to="/institutions">Institutions</NavLink>
@@ -392,7 +450,7 @@ function App() {
         </div>
       </header>
 
-      <main className="mx-auto grid max-w-6xl gap-6 px-6 py-8">
+      <main className="mx-auto grid max-w-6xl gap-6 px-4 py-8 md:px-6">
         {error ? <div className="rounded-2xl border border-amber-300 bg-amber-50 px-4 py-3 text-amber-900">{error}</div> : null}
         <Routes>
           <Route
@@ -402,17 +460,17 @@ function App() {
                 <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
                   <article className={statCardClass}>
                     <p className="text-sm font-medium text-slate-500">Institutions</p>
-                    <p className="mt-3 text-3xl font-semibold">{bootstrap.rootOverview.institutionCount}</p>
+                    <p className="mt-3 text-3xl font-semibold">{bootstrap.institutions.length}</p>
                     <p className="mt-2 text-sm text-slate-600">Institution-local timezone support starts with the seeded sample institution.</p>
                   </article>
                   <article className={statCardClass}>
                     <p className="text-sm font-medium text-slate-500">Kiosk-enabled</p>
-                    <p className="mt-3 text-3xl font-semibold">{bootstrap.rootOverview.kioskEnabledCount}</p>
+                    <p className="mt-3 text-3xl font-semibold">{bootstrap.institutions.filter((item) => item.kioskModeEnabled).length}</p>
                     <p className="mt-2 text-sm text-slate-600">Institutional users can toggle kiosk mode without involving root.</p>
                   </article>
                   <article className={statCardClass}>
                     <p className="text-sm font-medium text-slate-500">Demographic prompts</p>
-                    <p className="mt-3 text-3xl font-semibold">{bootstrap.rootOverview.demographicQuestionCount}</p>
+                    <p className="mt-3 text-3xl font-semibold">{bootstrap.demographics.length}</p>
                     <p className="mt-2 text-sm text-slate-600">Seeded from the confirmed question bank.</p>
                   </article>
                   <article className={statCardClass}>
@@ -610,15 +668,15 @@ function App() {
                   <div className="mt-5 grid gap-4 sm:grid-cols-2">
                     <div className="rounded-xl bg-slate-50 px-4 py-4">
                       <div className="text-sm text-slate-500">Institution users</div>
-                      <div className="mt-2 text-3xl font-semibold">{bootstrap.rootOverview.institutionUserCount}</div>
+                      <div className="mt-2 text-3xl font-semibold">{rootOverview?.institutionUserCount ?? '—'}</div>
                     </div>
                     <div className="rounded-xl bg-slate-50 px-4 py-4">
                       <div className="text-sm text-slate-500">Responses</div>
-                      <div className="mt-2 text-3xl font-semibold">{bootstrap.rootOverview.responseCount}</div>
+                      <div className="mt-2 text-3xl font-semibold">{rootOverview?.responseCount ?? '—'}</div>
                     </div>
                     <div className="rounded-xl bg-slate-50 px-4 py-4">
                       <div className="text-sm text-slate-500">Kiosk-enabled institutions</div>
-                      <div className="mt-2 text-3xl font-semibold">{bootstrap.rootOverview.kioskEnabledCount}</div>
+                      <div className="mt-2 text-3xl font-semibold">{rootOverview?.kioskEnabledCount ?? '—'}</div>
                     </div>
                     <div className="rounded-xl bg-slate-50 px-4 py-4">
                       <div className="text-sm text-slate-500">Trendlines</div>
@@ -628,9 +686,12 @@ function App() {
                 </article>
                 <article className={statCardClass}>
                   <h2 className="text-xl font-semibold">Privacy guardrail</h2>
-                  <p className="mt-3 text-sm text-slate-600">
-                    Root sees high-level counts only. Institution-level detail and trendlines stay out of this dashboard until requirements change.
-                  </p>
+                   <p className="mt-3 text-sm text-slate-600">
+                     Root sees high-level counts only. Institution-level detail and trendlines stay out of this dashboard until requirements change.
+                   </p>
+                   {!rootOverview ? (
+                     <p className="mt-3 text-sm text-amber-700">Root login is required to load aggregate metrics.</p>
+                   ) : null}
                 </article>
               </section>
             }
@@ -668,7 +729,7 @@ function App() {
                   <p className="mt-2 text-sm text-slate-600">
                     Only the confirmed fields are stored: username, password, send address, server address, port, and secure login type.
                   </p>
-                  <form className="mt-5 grid gap-4" onSubmit={(event) => void saveSmtpSettings(event)}>
+                   <form className="mt-5 grid gap-4" onSubmit={(event) => void saveSmtpSettings(event)}>
                     <div className="grid gap-4 md:grid-cols-2">
                       <label className="grid gap-2 text-sm font-medium">
                         Username
@@ -676,7 +737,7 @@ function App() {
                       </label>
                       <label className="grid gap-2 text-sm font-medium">
                         Password
-                        <input className="rounded-xl border border-slate-300 px-3 py-2" type="password" value={smtpForm.password} onChange={(event) => setSmtpForm((current) => ({ ...current, password: event.target.value }))} placeholder={bootstrap.smtpSettings.passwordSet ? 'Stored password kept unless replaced' : ''} />
+                        <input className="rounded-xl border border-slate-300 px-3 py-2" type="password" value={smtpForm.password} onChange={(event) => setSmtpForm((current) => ({ ...current, password: event.target.value }))} placeholder={smtpSettings?.passwordSet ? 'Stored password kept unless replaced' : ''} />
                       </label>
                       <label className="grid gap-2 text-sm font-medium">
                         Send address
@@ -702,6 +763,9 @@ function App() {
                     <button className="w-fit rounded-full bg-sky-700 px-5 py-2.5 text-sm font-semibold text-white shadow-lg shadow-sky-700/20" disabled={savingSmtp} type="submit">
                       {savingSmtp ? 'Saving…' : 'Save SMTP settings'}
                     </button>
+                    {sessionUser?.role !== 'root' ? (
+                      <p className="text-sm text-amber-700">Root login is required to view or edit SMTP settings.</p>
+                    ) : null}
                   </form>
                 </article>
                 <article className={statCardClass}>
@@ -709,19 +773,19 @@ function App() {
                   <dl className="mt-4 grid gap-3 text-sm text-slate-700">
                     <div className="rounded-xl bg-slate-50 px-4 py-3">
                       <dt className="font-medium text-slate-900">Username</dt>
-                      <dd>{bootstrap.smtpSettings.username || 'Not set'}</dd>
+                      <dd>{smtpSettings?.username || 'Not set'}</dd>
                     </div>
                     <div className="rounded-xl bg-slate-50 px-4 py-3">
                       <dt className="font-medium text-slate-900">Server</dt>
-                      <dd>{bootstrap.smtpSettings.serverAddress || 'Not set'}</dd>
+                      <dd>{smtpSettings?.serverAddress || 'Not set'}</dd>
                     </div>
                     <div className="rounded-xl bg-slate-50 px-4 py-3">
                       <dt className="font-medium text-slate-900">Send address</dt>
-                      <dd>{bootstrap.smtpSettings.sendAddress || 'Not set'}</dd>
+                      <dd>{smtpSettings?.sendAddress || 'Not set'}</dd>
                     </div>
                     <div className="rounded-xl bg-slate-50 px-4 py-3">
                       <dt className="font-medium text-slate-900">Secure login</dt>
-                      <dd>{bootstrap.smtpSettings.secureLoginType}</dd>
+                      <dd>{smtpSettings?.secureLoginType ?? 'Not set'}</dd>
                     </div>
                   </dl>
                 </article>

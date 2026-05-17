@@ -2,7 +2,7 @@ import { createHash, randomBytes, randomInt } from 'node:crypto'
 import { getDb } from './db.js'
 import { authMethodOptions, demographicsTemplates, foundationChecklist } from './data/demographics.js'
 import { config } from './config.js'
-import { listUsers, userStatuses } from './auth.js'
+import { userStatuses } from './auth.js'
 
 export type SmtpSettingsInput = {
   username: string
@@ -14,6 +14,10 @@ export type SmtpSettingsInput = {
 }
 
 const parseOptions = (value: string) => JSON.parse(value) as string[]
+
+function normalizeEmail(email: string) {
+  return email.trim().toLowerCase()
+}
 
 export function listInstitutions() {
   const db = getDb()
@@ -125,6 +129,13 @@ export function toggleInstitutionKioskMode(id: number, enabled: boolean) {
 
 export function createLoginChallenge(email: string, method: 'email_code' | 'magic_link') {
   const db = getDb()
+  db.prepare(
+    `DELETE FROM login_challenges
+      WHERE datetime(expires_at) < datetime('now', '-1 day')
+         OR consumed_at IS NOT NULL`,
+  ).run()
+
+  const normalizedEmail = normalizeEmail(email)
   const expiresAt = new Date(Date.now() + 10 * 60 * 1000).toISOString()
   const otpCode = method === 'email_code' ? `${randomInt(100000, 999999)}` : null
   const magicToken = method === 'magic_link' ? randomBytes(24).toString('base64url') : null
@@ -133,7 +144,7 @@ export function createLoginChallenge(email: string, method: 'email_code' | 'magi
     `INSERT INTO login_challenges (email, method, otp_code_hash, magic_token_hash, expires_at)
      VALUES (?, ?, ?, ?, ?)`,
   ).run(
-    email,
+    normalizedEmail,
     method,
     otpCode ? createHash('sha256').update(otpCode).digest('hex') : null,
     magicToken ? createHash('sha256').update(magicToken).digest('hex') : null,
@@ -141,7 +152,7 @@ export function createLoginChallenge(email: string, method: 'email_code' | 'magi
   )
 
   return {
-    email,
+    email: normalizedEmail,
     method,
     expiresAt,
     preview:
@@ -162,8 +173,6 @@ export function buildBootstrapPayload() {
     authOptions: authMethodOptions,
     institutions: listInstitutions(),
     demographics: listDemographics(),
-    rootOverview: getRootOverview(),
-    smtpSettings: getSmtpSettings(),
     foundationChecklist,
     roadmapSnapshot: {
       currentStep: 'Step 2 auth core',
@@ -175,7 +184,6 @@ export function buildBootstrapPayload() {
       userStatuses,
       turnstileSiteKey: config.turnstile.siteKey,
       devBypassTokenHint: config.turnstile.secretKey ? null : config.turnstile.devBypassToken,
-      userCount: listUsers().length,
     },
   }
 }
