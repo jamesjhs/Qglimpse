@@ -50,6 +50,13 @@ type BootstrapPayload = {
     nextStep: string
     questionBankSeeded: number
   }
+  authCore: {
+    supportedRoles: Array<'root' | 'institution_admin' | 'institution_user'>
+    userStatuses: Array<'active' | 'suspended' | 'deactivated'>
+    turnstileSiteKey: string
+    devBypassTokenHint: string | null
+    userCount: number
+  }
 }
 
 type SmtpFormState = {
@@ -71,6 +78,14 @@ type ChallengePreview = {
   }
 }
 
+type AuthUser = {
+  id: number
+  email: string
+  role: 'root' | 'institution_admin' | 'institution_user'
+  status: 'active' | 'suspended' | 'deactivated'
+  institutionId: number | null
+}
+
 const navClass = ({ isActive }: { isActive: boolean }) =>
   `rounded-full px-3 py-2 text-sm font-medium transition ${
     isActive ? 'bg-slate-900 text-white' : 'text-slate-600 hover:bg-slate-200 hover:text-slate-900'
@@ -85,6 +100,10 @@ function App() {
   const [error, setError] = useState<string | null>(null)
   const [challenge, setChallenge] = useState<ChallengePreview | null>(null)
   const [savingSmtp, setSavingSmtp] = useState(false)
+  const [authToken, setAuthToken] = useState('')
+  const [sessionUser, setSessionUser] = useState<AuthUser | null>(null)
+  const [authUsers, setAuthUsers] = useState<AuthUser[]>([])
+  const [turnstileToken, setTurnstileToken] = useState('dev-turnstile-pass')
   const [smtpForm, setSmtpForm] = useState<SmtpFormState>({
     username: '',
     password: '',
@@ -109,6 +128,7 @@ function App() {
           port: `${payload.smtpSettings.port}`,
           secureLoginType: payload.smtpSettings.secureLoginType,
         })
+        setTurnstileToken(payload.authCore.devBypassTokenHint ?? '')
       } catch (caughtError) {
         setError(caughtError instanceof Error ? caughtError.message : 'Unknown error')
       } finally {
@@ -214,6 +234,129 @@ function App() {
     }
   }
 
+  const registerAuthUser = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    setError(null)
+    const formData = new FormData(event.currentTarget)
+    const payload = {
+      email: String(formData.get('email') ?? ''),
+      password: String(formData.get('password') ?? ''),
+      role: String(formData.get('role') ?? 'institution_user'),
+      institutionId: formData.get('institutionId') ? Number(formData.get('institutionId')) : null,
+      turnstileToken,
+    }
+
+    const response = await fetch('/api/auth/register', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    })
+
+    if (!response.ok) {
+      const result = (await response.json()) as { error?: string }
+      throw new Error(result.error ?? 'Unable to register user.')
+    }
+  }
+
+  const loginAuthUser = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    setError(null)
+    const formData = new FormData(event.currentTarget)
+    const response = await fetch('/api/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        email: String(formData.get('email') ?? ''),
+        password: String(formData.get('password') ?? ''),
+        turnstileToken,
+      }),
+    })
+
+    if (!response.ok) {
+      const result = (await response.json()) as { error?: string }
+      throw new Error(result.error ?? 'Unable to login.')
+    }
+
+    const result = (await response.json()) as { token: string; user: AuthUser }
+    setAuthToken(result.token)
+    setSessionUser(result.user)
+  }
+
+  const fetchSession = async () => {
+    if (!authToken) {
+      setError('Login first to fetch session state.')
+      return
+    }
+
+    const response = await fetch('/api/auth/session', {
+      headers: { Authorization: `Bearer ${authToken}` },
+    })
+
+    if (!response.ok) {
+      const result = (await response.json()) as { error?: string }
+      throw new Error(result.error ?? 'Unable to fetch session.')
+    }
+
+    const result = (await response.json()) as { user: AuthUser }
+    setSessionUser(result.user)
+  }
+
+  const logoutAuthUser = async () => {
+    if (!authToken) {
+      return
+    }
+
+    await fetch('/api/auth/logout', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${authToken}` },
+    })
+    setAuthToken('')
+    setSessionUser(null)
+    setAuthUsers([])
+  }
+
+  const loadAuthUsers = async () => {
+    if (!authToken) {
+      setError('Root session required to list users.')
+      return
+    }
+
+    const response = await fetch('/api/auth/users', {
+      headers: { Authorization: `Bearer ${authToken}` },
+    })
+    if (!response.ok) {
+      const result = (await response.json()) as { error?: string }
+      throw new Error(result.error ?? 'Unable to list users.')
+    }
+
+    const result = (await response.json()) as { users: AuthUser[] }
+    setAuthUsers(result.users)
+  }
+
+  const setUserStatus = async (id: number, status: AuthUser['status']) => {
+    if (!authToken) {
+      setError('Root session required to update user status.')
+      return
+    }
+
+    const response = await fetch(`/api/auth/users/${id}/status`, {
+      method: 'PATCH',
+      headers: {
+        Authorization: `Bearer ${authToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ status }),
+    })
+
+    if (!response.ok) {
+      const result = (await response.json()) as { error?: string }
+      throw new Error(result.error ?? 'Unable to update user status.')
+    }
+
+    const result = (await response.json()) as { user: AuthUser }
+    setAuthUsers((current) => current.map((item) => (item.id === result.user.id ? result.user : item)))
+  }
+
   if (loading) {
     return <div className="mx-auto flex min-h-screen max-w-6xl items-center justify-center px-6">Loading foundation scaffold…</div>
   }
@@ -240,7 +383,7 @@ function App() {
         </div>
         <div className="mx-auto flex max-w-6xl flex-wrap gap-2 px-6 pb-6">
           <NavLink className={navClass} to="/">Overview</NavLink>
-          <NavLink className={navClass} to="/login-demo">Login demo</NavLink>
+          <NavLink className={navClass} to="/auth-core">Auth core</NavLink>
           <NavLink className={navClass} to="/institutions">Institutions</NavLink>
           <NavLink className={navClass} to="/kiosk">Kiosk</NavLink>
           <NavLink className={navClass} to="/root">Root</NavLink>
@@ -306,73 +449,97 @@ function App() {
             }
           />
           <Route
-            path="/login-demo"
+            path="/auth-core"
             element={
-              <section className="grid gap-6 lg:grid-cols-[1.1fr_0.9fr]">
+              <section className="grid gap-6">
                 <article className={statCardClass}>
-                  <h2 className="text-xl font-semibold">Email 2FA delivery demo</h2>
+                  <h2 className="text-xl font-semibold">Turnstile + auth core controls</h2>
                   <p className="mt-2 text-sm text-slate-600">
-                    Users can choose a one-time code or a magic link. The magic link supports cross-device login.
+                    Step 2 adds registration, password login, bearer sessions, root-seeded accounts, and account lifecycle status updates.
                   </p>
-                  <form className="mt-5 grid gap-4" onSubmit={(event) => void createChallenge(event)}>
-                    <label className="grid gap-2 text-sm font-medium">
-                      Email address
-                      <input
-                        required
-                        name="email"
-                        type="email"
-                        className="rounded-xl border border-slate-300 bg-white px-3 py-2 outline-none ring-sky-500 transition focus:ring"
-                        placeholder="visitor@example.com"
-                      />
-                    </label>
-                    <fieldset className="grid gap-2 text-sm">
-                      <legend className="font-medium">Delivery method</legend>
-                      {bootstrap.authOptions.map((option, index) => (
-                        <label key={option.id} className="flex items-start gap-3 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
-                          <input defaultChecked={index === 0} name="method" type="radio" value={option.id} />
-                          <span>
-                            <span className="block font-medium text-slate-900">{option.label}</span>
-                            <span className="text-slate-600">{option.description}</span>
-                          </span>
-                        </label>
-                      ))}
-                    </fieldset>
-                    <button className="w-fit rounded-full bg-slate-900 px-5 py-2.5 text-sm font-semibold text-white shadow-lg shadow-slate-900/15" type="submit">
-                      Create preview
-                    </button>
-                  </form>
+                  <label className="mt-4 grid gap-2 text-sm font-medium md:max-w-lg">
+                    Turnstile token (dev bypass in local mode)
+                    <input className="rounded-xl border border-slate-300 px-3 py-2" value={turnstileToken} onChange={(event) => setTurnstileToken(event.target.value)} />
+                  </label>
                 </article>
-                <article className={statCardClass}>
-                  <h2 className="text-xl font-semibold">Preview</h2>
-                  {challenge ? (
-                    <div className="mt-4 grid gap-3 text-sm text-slate-700">
-                      <div>
-                        <div className="font-medium text-slate-900">Recipient</div>
-                        <div>{challenge.email}</div>
-                      </div>
-                      <div>
-                        <div className="font-medium text-slate-900">Expires</div>
-                        <div>{new Date(challenge.expiresAt).toLocaleString()}</div>
-                      </div>
-                      {challenge.preview.otpCode ? (
-                        <div>
-                          <div className="font-medium text-slate-900">One-time code</div>
-                          <div className="mt-1 rounded-xl bg-slate-950 px-4 py-3 font-mono text-lg text-emerald-300">{challenge.preview.otpCode}</div>
-                        </div>
-                      ) : null}
-                      {challenge.preview.magicLink ? (
-                        <div>
-                          <div className="font-medium text-slate-900">Magic link</div>
-                          <a className="mt-1 block break-all rounded-xl bg-slate-100 px-4 py-3 text-sky-700" href={challenge.preview.magicLink}>
-                            {challenge.preview.magicLink}
-                          </a>
-                        </div>
-                      ) : null}
+                <div className="grid gap-6 lg:grid-cols-2">
+                  <article className={statCardClass}>
+                    <h2 className="text-xl font-semibold">Register user</h2>
+                    <form className="mt-4 grid gap-3" onSubmit={(event) => void registerAuthUser(event).catch((caughtError: unknown) => setError(caughtError instanceof Error ? caughtError.message : 'Registration failed.'))}>
+                      <input className="rounded-xl border border-slate-300 px-3 py-2" name="email" placeholder="new-user@example.com" required type="email" />
+                      <input className="rounded-xl border border-slate-300 px-3 py-2" name="password" placeholder="Password (min 10 chars)" required type="password" />
+                      <select className="rounded-xl border border-slate-300 px-3 py-2" name="role" defaultValue="institution_user">
+                        <option value="institution_user">institution_user</option>
+                        <option value="institution_admin">institution_admin</option>
+                      </select>
+                      <input className="rounded-xl border border-slate-300 px-3 py-2" name="institutionId" placeholder="Institution ID (required for non-root)" defaultValue={bootstrap.institutions[0]?.id ?? ''} />
+                      <button className="w-fit rounded-full bg-slate-900 px-5 py-2.5 text-sm font-semibold text-white" type="submit">Register</button>
+                    </form>
+                  </article>
+                  <article className={statCardClass}>
+                    <h2 className="text-xl font-semibold">Login + session</h2>
+                    <form className="mt-4 grid gap-3" onSubmit={(event) => void loginAuthUser(event).catch((caughtError: unknown) => setError(caughtError instanceof Error ? caughtError.message : 'Login failed.'))}>
+                      <input className="rounded-xl border border-slate-300 px-3 py-2" name="email" placeholder="root@quickglimpse.local" required type="email" />
+                      <input className="rounded-xl border border-slate-300 px-3 py-2" name="password" placeholder="Password" required type="password" />
+                      <button className="w-fit rounded-full bg-sky-700 px-5 py-2.5 text-sm font-semibold text-white" type="submit">Login</button>
+                    </form>
+                    <div className="mt-4 flex flex-wrap gap-2">
+                      <button className="rounded-full bg-slate-200 px-4 py-2 text-sm font-semibold" onClick={() => void fetchSession().catch((caughtError: unknown) => setError(caughtError instanceof Error ? caughtError.message : 'Session check failed.'))} type="button">Check session</button>
+                      <button className="rounded-full bg-slate-200 px-4 py-2 text-sm font-semibold" onClick={() => void logoutAuthUser().catch((caughtError: unknown) => setError(caughtError instanceof Error ? caughtError.message : 'Logout failed.'))} type="button">Logout</button>
                     </div>
-                  ) : (
-                    <p className="mt-4 text-sm text-slate-600">Submit a demo request to preview the emailed 2FA content.</p>
-                  )}
-                </article>
+                    <div className="mt-4 rounded-xl bg-slate-50 px-4 py-3 text-sm text-slate-700">
+                      <div className="font-medium text-slate-900">Current session</div>
+                      <div>{sessionUser ? `${sessionUser.email} (${sessionUser.role})` : 'No active session loaded'}</div>
+                    </div>
+                  </article>
+                </div>
+                <div className="grid gap-6 lg:grid-cols-2">
+                  <article className={statCardClass}>
+                    <h2 className="text-xl font-semibold">Account lifecycle (root only)</h2>
+                    <button className="mt-4 rounded-full bg-slate-900 px-4 py-2 text-sm font-semibold text-white" onClick={() => void loadAuthUsers().catch((caughtError: unknown) => setError(caughtError instanceof Error ? caughtError.message : 'Unable to load users.'))} type="button">
+                      Load users
+                    </button>
+                    <div className="mt-4 grid gap-2 text-sm">
+                      {authUsers.map((user) => (
+                        <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3" key={user.id}>
+                          <div className="font-medium text-slate-900">{user.email}</div>
+                          <div className="text-slate-600">{user.role} · {user.status}</div>
+                          <div className="mt-2 flex flex-wrap gap-2">
+                            {bootstrap.authCore.userStatuses.map((status) => (
+                              <button className="rounded-full bg-white px-3 py-1 text-xs font-semibold text-slate-700 ring-1 ring-slate-300" key={status} onClick={() => void setUserStatus(user.id, status).catch((caughtError: unknown) => setError(caughtError instanceof Error ? caughtError.message : 'Unable to update status.'))} type="button">
+                                {status}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </article>
+                  <article className={statCardClass}>
+                    <h2 className="text-xl font-semibold">Email 2FA delivery demo</h2>
+                    <form className="mt-4 grid gap-3" onSubmit={(event) => void createChallenge(event)}>
+                      <input className="rounded-xl border border-slate-300 px-3 py-2" name="email" placeholder="visitor@example.com" required type="email" />
+                      <fieldset className="grid gap-2 text-sm">
+                        {bootstrap.authOptions.map((option, index) => (
+                          <label key={option.id} className="flex items-start gap-3 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
+                            <input defaultChecked={index === 0} name="method" type="radio" value={option.id} />
+                            <span>
+                              <span className="block font-medium text-slate-900">{option.label}</span>
+                              <span className="text-slate-600">{option.description}</span>
+                            </span>
+                          </label>
+                        ))}
+                      </fieldset>
+                      <button className="w-fit rounded-full bg-slate-900 px-5 py-2.5 text-sm font-semibold text-white" type="submit">Create preview</button>
+                    </form>
+                    {challenge ? (
+                      <div className="mt-4 rounded-xl bg-slate-50 px-4 py-3 text-sm text-slate-700">
+                        <div className="font-medium text-slate-900">{challenge.method === 'magic_link' ? 'Magic link' : 'One-time code'} preview</div>
+                        <div className="mt-2 break-all">{challenge.preview.magicLink ?? challenge.preview.otpCode}</div>
+                      </div>
+                    ) : null}
+                  </article>
+                </div>
               </section>
             }
           />

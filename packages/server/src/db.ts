@@ -26,9 +26,30 @@ function runMigrations(db: Database.Database) {
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       email TEXT NOT NULL UNIQUE,
       role TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'active',
       institution_id INTEGER,
+      last_login_at TEXT,
+      deactivated_at TEXT,
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY (institution_id) REFERENCES institutions(id) ON DELETE SET NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS user_credentials (
+      user_id INTEGER PRIMARY KEY,
+      password_hash TEXT NOT NULL,
+      must_change_password INTEGER NOT NULL DEFAULT 0,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS auth_sessions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL,
+      token_hash TEXT NOT NULL UNIQUE,
+      expires_at TEXT NOT NULL,
+      revoked_at TEXT,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
     );
 
     CREATE TABLE IF NOT EXISTS question_templates (
@@ -84,6 +105,20 @@ function runMigrations(db: Database.Database) {
       FOREIGN KEY (institution_id) REFERENCES institutions(id) ON DELETE CASCADE
     );
   `)
+
+  const userColumns = db
+    .prepare(`PRAGMA table_info(users)`)
+    .all() as Array<{ name: string }>
+  const columnNames = new Set(userColumns.map((column) => column.name))
+  if (!columnNames.has('status')) {
+    db.exec(`ALTER TABLE users ADD COLUMN status TEXT NOT NULL DEFAULT 'active';`)
+  }
+  if (!columnNames.has('last_login_at')) {
+    db.exec(`ALTER TABLE users ADD COLUMN last_login_at TEXT;`)
+  }
+  if (!columnNames.has('deactivated_at')) {
+    db.exec(`ALTER TABLE users ADD COLUMN deactivated_at TEXT;`)
+  }
 }
 
 function seedInstitution(db: Database.Database): SeedInstitution {

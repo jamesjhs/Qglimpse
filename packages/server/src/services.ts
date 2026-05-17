@@ -2,6 +2,7 @@ import { createHash, randomBytes, randomInt } from 'node:crypto'
 import { getDb } from './db.js'
 import { authMethodOptions, demographicsTemplates, foundationChecklist } from './data/demographics.js'
 import { config } from './config.js'
+import { listUsers, userStatuses } from './auth.js'
 
 export type SmtpSettingsInput = {
   username: string
@@ -165,9 +166,16 @@ export function buildBootstrapPayload() {
     smtpSettings: getSmtpSettings(),
     foundationChecklist,
     roadmapSnapshot: {
-      currentStep: 'Step 1 foundation scaffold',
-      nextStep: 'Step 2 auth core',
+      currentStep: 'Step 2 auth core',
+      nextStep: 'Step 3 emailed OTP + magic link 2FA flow completion',
       questionBankSeeded: demographicsTemplates.length,
+    },
+    authCore: {
+      supportedRoles: ['root', 'institution_admin', 'institution_user'],
+      userStatuses,
+      turnstileSiteKey: config.turnstile.siteKey,
+      devBypassTokenHint: config.turnstile.secretKey ? null : config.turnstile.devBypassToken,
+      userCount: listUsers().length,
     },
   }
 }
