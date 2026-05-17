@@ -456,6 +456,9 @@ export type CreateQuestionInput = {
   includeInKiosk: boolean
   isDemographic: boolean
   displayOrder: number
+  scheduleDays?: number[]
+  scheduleStartTime?: string | null
+  scheduleEndTime?: string | null
 }
 
 export function createCustomQuestion(institutionId: number, input: CreateQuestionInput) {
@@ -468,9 +471,9 @@ export function createCustomQuestion(institutionId: number, input: CreateQuestio
   const result = db
     .prepare(
       `INSERT INTO institution_questions
-         (institution_id, template_key, question_type, prompt, options_json,
-          include_in_kiosk, is_demographic, display_order)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+          (institution_id, template_key, question_type, prompt, options_json,
+           include_in_kiosk, is_demographic, display_order, schedule_days, schedule_start_time, schedule_end_time)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .run(
       institutionId,
@@ -481,6 +484,9 @@ export function createCustomQuestion(institutionId: number, input: CreateQuestio
       input.includeInKiosk ? 1 : 0,
       input.isDemographic ? 1 : 0,
       input.displayOrder,
+      JSON.stringify(input.scheduleDays ?? []),
+      input.scheduleStartTime ?? null,
+      input.scheduleEndTime ?? null,
     )
   const id = Number(result.lastInsertRowid)
   return getInstitutionQuestions(institutionId).find((q) => q.id === id) ?? null
@@ -508,24 +514,68 @@ function timeToMinutes(time: string): number {
   return (h ?? 0) * 60 + (m ?? 0)
 }
 
+function getInstitutionLocalTime(institutionId: number) {
+  const db = getDb()
+  const institution = db
+    .prepare('SELECT timezone FROM institutions WHERE id = ?')
+    .get(institutionId) as { timezone: string } | undefined
+  const timezone = institution?.timezone || 'UTC'
+  const formatter = new Intl.DateTimeFormat('en-US', {
+    timeZone: timezone,
+    weekday: 'short',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  })
+  const parts = formatter.formatToParts(new Date())
+  const weekday = parts.find((p) => p.type === 'weekday')?.value ?? 'Sun'
+  const hour = Number(parts.find((p) => p.type === 'hour')?.value ?? '0')
+  const minute = Number(parts.find((p) => p.type === 'minute')?.value ?? '0')
+  const dayMap: Record<string, number> = {
+    Sun: 0,
+    Mon: 1,
+    Tue: 2,
+    Wed: 3,
+    Thu: 4,
+    Fri: 5,
+    Sat: 6,
+  }
+  return {
+    day: dayMap[weekday] ?? 0,
+    minutes: hour * 60 + minute,
+  }
+}
+
+function isWithinTimeWindow(currentMinutes: number, startTime: string | null, endTime: string | null) {
+  if (!startTime && !endTime) {
+    return true
+  }
+
+  if (startTime && endTime) {
+    const start = timeToMinutes(startTime)
+    const end = timeToMinutes(endTime)
+    if (start <= end) {
+      return currentMinutes >= start && currentMinutes <= end
+    }
+    return currentMinutes >= start || currentMinutes <= end
+  }
+
+  if (startTime) {
+    return currentMinutes >= timeToMinutes(startTime)
+  }
+
+  return currentMinutes <= timeToMinutes(endTime ?? '23:59')
+}
+
 export function getActiveKioskQuestions(institutionId: number) {
-  const now = new Date()
-  const currentDay = now.getDay()
-  const currentMinutes = now.getHours() * 60 + now.getMinutes()
+  const { day: currentDay, minutes: currentMinutes } = getInstitutionLocalTime(institutionId)
 
   const questions = getInstitutionQuestions(institutionId)
   return questions.filter((q) => {
+    if (!q.isActive) return false
     if (!q.includeInKiosk) return false
     if (q.scheduleDays.length > 0 && !q.scheduleDays.includes(currentDay)) return false
-    if (q.scheduleStartTime) {
-      const start = timeToMinutes(q.scheduleStartTime)
-      if (currentMinutes < start) return false
-    }
-    if (q.scheduleEndTime) {
-      const end = timeToMinutes(q.scheduleEndTime)
-      if (currentMinutes > end) return false
-    }
-    return true
+    return isWithinTimeWindow(currentMinutes, q.scheduleStartTime, q.scheduleEndTime)
   })
 }
 
@@ -551,6 +601,7 @@ export function getKioskStatus(institutionSlug: string) {
     institutionId: row.id,
     name: row.name,
     timezone: row.timezone,
+    questions: getActiveKioskQuestions(row.id),
   }
 }
 

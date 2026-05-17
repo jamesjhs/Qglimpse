@@ -158,6 +158,9 @@ const createQuestionSchema = z.object({
   includeInKiosk: z.boolean().default(true),
   isDemographic: z.boolean().default(false),
   displayOrder: z.number().int().default(0),
+  scheduleDays: z.array(z.number().int().min(0).max(6)).default([]),
+  scheduleStartTime: z.string().regex(/^\d{2}:\d{2}$/).nullable().default(null),
+  scheduleEndTime: z.string().regex(/^\d{2}:\d{2}$/).nullable().default(null),
 })
 
 const kioskAnswerSchema = z.object({

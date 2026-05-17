@@ -192,6 +192,8 @@ function App() {
   const [crossTabPrimary, setCrossTabPrimary] = useState('')
   const [crossTabDemo, setCrossTabDemo] = useState('')
   const [crossTabData, setCrossTabData] = useState<Array<{ primaryAnswer: string; demoAnswer: string; count: number | '< 5' }> | null>(null)
+  const kioskPromptQuestions = useMemo(() => kioskQuestions.filter((q) => !q.isDemographic), [kioskQuestions])
+  const kioskDemographicQuestions = useMemo(() => kioskQuestions.filter((q) => q.isDemographic), [kioskQuestions])
 
   useEffect(() => {
     const load = async () => {
@@ -744,6 +746,8 @@ function App() {
         throw new Error(result.error ?? 'Unable to start kiosk session.')
       }
       const data = (await response.json()) as { sessionToken: string; questions: Question[] }
+      const hasPromptQuestions = data.questions.some((question) => !question.isDemographic)
+      const hasDemographicQuestions = data.questions.some((question) => question.isDemographic)
       setKioskSessionToken(data.sessionToken)
       setKioskQuestions(data.questions)
       setKioskCurrentIdx(0)
@@ -751,7 +755,9 @@ function App() {
       setKioskStarValue(0)
       setKioskSliderValue(5)
       setKioskMultiAnswers([])
-      setKioskState('questions')
+      setKioskDemoAnswers({})
+      setKioskDemoIdx(0)
+      setKioskState(hasPromptQuestions ? 'questions' : hasDemographicQuestions ? 'demographics' : 'thankyou')
     } catch (caughtError) {
       setError(caughtError instanceof Error ? caughtError.message : 'Unable to start kiosk session.')
     } finally {
@@ -760,7 +766,7 @@ function App() {
   }
 
   const submitKioskAnswer = async () => {
-    const question = kioskQuestions[kioskCurrentIdx]
+    const question = kioskPromptQuestions[kioskCurrentIdx]
     if (!question || !kioskSessionToken) return
     setKioskLoading(true)
     try {
@@ -776,15 +782,14 @@ function App() {
         body: JSON.stringify({ sessionToken: kioskSessionToken, questionKey: qKey, answer }),
       })
       const nextIdx = kioskCurrentIdx + 1
-      if (nextIdx < kioskQuestions.length) {
+      if (nextIdx < kioskPromptQuestions.length) {
         setKioskCurrentIdx(nextIdx)
         setKioskCurrentAnswer('')
         setKioskStarValue(0)
         setKioskSliderValue(5)
         setKioskMultiAnswers([])
       } else {
-        const demoQs = kioskQuestions.filter((q) => q.isDemographic)
-        if (demoQs.length > 0) {
+        if (kioskDemographicQuestions.length > 0) {
           setKioskState('demographics')
           setKioskDemoIdx(0)
         } else {
@@ -793,6 +798,32 @@ function App() {
       }
     } finally {
       setKioskLoading(false)
+    }
+  }
+
+  const advanceKioskDemographic = async (skip: boolean) => {
+    if (!kioskSessionToken) return
+    const currentDemo = kioskDemographicQuestions[kioskDemoIdx]
+    if (!currentDemo) {
+      await completeKiosk(kioskDemoAnswers)
+      return
+    }
+
+    const questionKey = currentDemo.templateKey ?? `iq-${currentDemo.id}`
+    const answer = kioskDemoAnswers[questionKey]
+
+    if (!skip && answer) {
+      await fetch('/api/kiosk/answer', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sessionToken: kioskSessionToken, questionKey, answer }),
+      })
+    }
+
+    if (kioskDemoIdx + 1 < kioskDemographicQuestions.length) {
+      setKioskDemoIdx((i) => i + 1)
+    } else {
+      await completeKiosk(kioskDemoAnswers)
     }
   }
 
@@ -839,11 +870,8 @@ function App() {
         onSubmitAnswer={() => void submitKioskAnswer()}
         onDemoAnswer={(key, val) => setKioskDemoAnswers((current) => ({ ...current, [key]: val }))}
         onComplete={() => void completeKiosk(kioskDemoAnswers)}
-        onDemoNext={() => {
-          const demoQs = kioskQuestions.filter((q) => q.isDemographic)
-          if (kioskDemoIdx + 1 < demoQs.length) setKioskDemoIdx((i) => i + 1)
-          else void completeKiosk(kioskDemoAnswers)
-        }}
+        onDemoSkip={() => void advanceKioskDemographic(true)}
+        onDemoNext={() => void advanceKioskDemographic(false)}
       />} />
       <Route path="*" element={
     <div className="min-h-screen bg-slate-50 text-slate-900">
@@ -1780,6 +1808,7 @@ type KioskFullScreenProps = {
   onSubmitAnswer: () => void
   onDemoAnswer: (key: string, val: string) => void
   onComplete: () => void
+  onDemoSkip: () => void
   onDemoNext: () => void
 }
 
@@ -1789,10 +1818,11 @@ function KioskFullScreen(props: KioskFullScreenProps) {
     kioskCurrentAnswer, kioskStarValue, kioskSliderValue, kioskMultiAnswers,
     kioskDemoIdx, kioskDemoAnswers, kioskCountdown, error,
     onStart, onAnswer, onStarChange, onSliderChange, onMultiToggle,
-    onSubmitAnswer, onDemoAnswer, onComplete, onDemoNext,
+    onSubmitAnswer, onDemoAnswer, onComplete, onDemoSkip, onDemoNext,
   } = props
 
-  const currentQuestion = kioskQuestions[kioskCurrentIdx] ?? null
+  const promptQuestions = kioskQuestions.filter((q) => !q.isDemographic)
+  const currentQuestion = promptQuestions[kioskCurrentIdx] ?? null
   const demoQuestions = kioskQuestions.filter((q) => q.isDemographic)
   const currentDemoQ = demoQuestions[kioskDemoIdx] ?? null
 
@@ -1825,7 +1855,7 @@ function KioskFullScreen(props: KioskFullScreenProps) {
       ) : kioskState === 'questions' && currentQuestion ? (
         <div className="w-full max-w-xl">
           <div className="mb-6 text-center text-sm text-slate-400">
-            Question {kioskCurrentIdx + 1} of {kioskQuestions.length}
+            Question {kioskCurrentIdx + 1} of {promptQuestions.length}
           </div>
           <div className="rounded-3xl bg-slate-800 px-8 py-8">
             <h2 className="text-2xl font-semibold leading-snug">{currentQuestion.prompt}</h2>
@@ -1848,13 +1878,13 @@ function KioskFullScreen(props: KioskFullScreenProps) {
                   <input
                     className="w-full accent-sky-500"
                     max="10"
-                    min="1"
+                    min="0"
                     type="range"
                     value={kioskSliderValue}
                     onChange={(event) => onSliderChange(Number(event.target.value))}
                   />
                   <div className="mt-2 flex justify-between text-sm text-slate-400">
-                    <span>1 — Poor</span>
+                    <span>0 — Poor</span>
                     <span className="text-2xl font-semibold text-white">{kioskSliderValue}</span>
                     <span>10 — Excellent</span>
                   </div>
@@ -1914,7 +1944,7 @@ function KioskFullScreen(props: KioskFullScreenProps) {
                 onClick={onSubmitAnswer}
                 type="button"
               >
-                {kioskCurrentIdx + 1 < kioskQuestions.length ? 'Next →' : 'Continue'}
+                {kioskCurrentIdx + 1 < promptQuestions.length ? 'Next →' : 'Continue'}
               </button>
             </div>
           </div>
@@ -1952,7 +1982,7 @@ function KioskFullScreen(props: KioskFullScreenProps) {
             <div className="mt-6 flex justify-between">
               <button
                 className="rounded-full bg-slate-700 px-6 py-3 font-semibold transition hover:bg-slate-600"
-                onClick={onDemoNext}
+                onClick={onDemoSkip}
                 type="button"
               >
                 Skip
