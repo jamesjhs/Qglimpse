@@ -169,9 +169,18 @@ const kioskAnswerSchema = z.object({
   answer: z.unknown(),
 })
 
+const prohibitedDemographicKeys = new Set(['__proto__', 'prototype', 'constructor'])
+const demographicKeySchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(64)
+  .regex(/^[a-zA-Z0-9:_-]+$/)
+  .refine((key) => !prohibitedDemographicKeys.has(key), 'Invalid demographic key.')
+
 const kioskCompleteSchema = z.object({
   sessionToken: z.string().min(1),
-  demographicData: z.record(z.string(), z.string()).default({}),
+  demographicData: z.record(demographicKeySchema, z.string().trim().max(256)).default({}),
 })
 
 const smtpTestSchema = z.object({
@@ -242,6 +251,13 @@ function parseNumericId(value: string | string[] | undefined) {
   }
 
   return parsed
+}
+
+async function enforceMinResponseTime(startedAt: number, minimumMs: number) {
+  const remaining = minimumMs - (Date.now() - startedAt)
+  if (remaining > 0) {
+    await new Promise((resolve) => setTimeout(resolve, remaining))
+  }
 }
 
 function getAuthenticatedSession(req: express.Request, res: express.Response) {
@@ -480,7 +496,8 @@ export function createApp() {
       return res.status(400).json({ error: 'Invalid login challenge request.' })
     }
 
-    return res.status(201).json(createLoginChallenge(parsed.data.email, parsed.data.method))
+    createLoginChallenge(parsed.data.email, parsed.data.method)
+    return res.status(202).json({ accepted: true })
   })
 
   app.post('/api/auth/challenges/verify', authChallengeLimiter, (req, res) => {
@@ -577,14 +594,16 @@ export function createApp() {
     }
   })
 
-  app.post('/api/auth/password-reset/request', authChallengeLimiter, (req, res) => {
+  app.post('/api/auth/password-reset/request', authChallengeLimiter, async (req, res) => {
     const parsed = passwordResetRequestSchema.safeParse(req.body)
     if (!parsed.success) {
       return res.status(400).json({ error: 'Invalid password reset request.' })
     }
 
-    const result = requestPasswordReset(parsed.data.email)
-    return res.json(result)
+    const startedAt = Date.now()
+    requestPasswordReset(parsed.data.email)
+    await enforceMinResponseTime(startedAt, 150)
+    return res.status(202).json({ accepted: true })
   })
 
   app.post('/api/auth/password-reset/confirm', authChallengeLimiter, (req, res) => {

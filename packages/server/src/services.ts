@@ -142,27 +142,38 @@ export function toggleInstitutionKioskMode(id: number, enabled: boolean) {
 
 export function createLoginChallenge(email: string, method: 'email_code' | 'magic_link') {
   const db = getDb()
-  db.prepare(
-    `DELETE FROM login_challenges
-      WHERE datetime(expires_at) < datetime('now', '-1 day')
-         OR consumed_at IS NOT NULL`,
-  ).run()
-
   const normalizedEmail = normalizeEmail(email)
   const expiresAt = new Date(Date.now() + 10 * 60 * 1000).toISOString()
   const otpCode = method === 'email_code' ? `${randomInt(100000, 999999)}` : null
   const magicToken = method === 'magic_link' ? randomBytes(24).toString('base64url') : null
 
-  db.prepare(
-    `INSERT INTO login_challenges (email, method, otp_code_hash, magic_token_hash, expires_at)
-     VALUES (?, ?, ?, ?, ?)`,
-  ).run(
-    normalizedEmail,
-    method,
-    otpCode ? createHash('sha256').update(otpCode).digest('hex') : null,
-    magicToken ? createHash('sha256').update(magicToken).digest('hex') : null,
-    expiresAt,
-  )
+  db.transaction(() => {
+    db.prepare(
+      `DELETE FROM login_challenges
+        WHERE datetime(expires_at) < datetime('now', '-1 day')
+           OR consumed_at IS NOT NULL`,
+    ).run()
+
+    db.prepare(
+      `UPDATE login_challenges
+          SET consumed_at = CURRENT_TIMESTAMP
+        WHERE email = ?
+          AND method = ?
+          AND consumed_at IS NULL
+          AND datetime(expires_at) > datetime('now')`,
+    ).run(normalizedEmail, method)
+
+    db.prepare(
+      `INSERT INTO login_challenges (email, method, otp_code_hash, magic_token_hash, expires_at)
+       VALUES (?, ?, ?, ?, ?)`,
+    ).run(
+      normalizedEmail,
+      method,
+      otpCode ? createHash('sha256').update(otpCode).digest('hex') : null,
+      magicToken ? createHash('sha256').update(magicToken).digest('hex') : null,
+      expiresAt,
+    )
+  })()
 
   return {
     email: normalizedEmail,
@@ -183,16 +194,19 @@ export function requestPasswordReset(email: string) {
         AND (datetime(expires_at) < datetime('now', '-1 day') OR consumed_at IS NOT NULL)`,
   ).run()
   const normalizedEmail = email.trim().toLowerCase()
+  const tokenHash = createHash('sha256').update(randomBytes(24).toString('base64url')).digest('hex')
   const user = db.prepare('SELECT id FROM users WHERE email = ?').get(normalizedEmail) as { id: number } | undefined
   if (!user) {
-    return {}
+    db.prepare(`SELECT COUNT(*) AS count FROM login_challenges WHERE email = ? AND method = 'password_reset'`).get(
+      normalizedEmail,
+    )
+    return { accepted: true }
   }
-  const rawToken = randomBytes(24).toString('base64url')
   const expiresAt = new Date(Date.now() + 60 * 60 * 1000).toISOString()
   db.prepare(
     `INSERT INTO login_challenges (email, method, magic_token_hash, expires_at) VALUES (?, ?, ?, ?)`,
-  ).run(normalizedEmail, 'password_reset', createHash('sha256').update(rawToken).digest('hex'), expiresAt)
-  return { preview: { token: rawToken } }
+  ).run(normalizedEmail, 'password_reset', tokenHash, expiresAt)
+  return { accepted: true }
 }
 
 export function requestEmailVerification(userId: number) {
@@ -626,19 +640,26 @@ export function startKioskSession(institutionId: number) {
 
 export function submitKioskAnswer(sessionToken: string, questionKey: string, answerJson: string) {
   const db = getDb()
-  const session = db
-    .prepare(
-      `SELECT id, institution_id AS institutionId FROM kiosk_sessions
-       WHERE session_token = ? AND completed_at IS NULL`,
-    )
-    .get(sessionToken) as { id: number; institutionId: number } | undefined
-  if (!session) {
-    throw new Error('Invalid or completed session.')
-  }
-  db.prepare(
-    `INSERT INTO responses (institution_id, question_key, answer_json, kiosk_session_id) VALUES (?, ?, ?, ?)`,
-  ).run(session.institutionId, questionKey, answerJson, session.id)
-  return { recorded: true }
+  return db.transaction(() => {
+    const session = db
+      .prepare(
+        `SELECT id, institution_id AS institutionId FROM kiosk_sessions
+         WHERE session_token = ? AND completed_at IS NULL`,
+      )
+      .get(sessionToken) as { id: number; institutionId: number } | undefined
+    if (!session) {
+      throw new Error('Invalid or completed session.')
+    }
+    db.prepare(
+      `INSERT INTO responses (institution_id, question_key, answer_json, kiosk_session_id)
+       VALUES (?, ?, ?, ?)
+       ON CONFLICT(kiosk_session_id, question_key) WHERE kiosk_session_id IS NOT NULL
+       DO UPDATE SET
+         answer_json = excluded.answer_json,
+         created_at = CURRENT_TIMESTAMP`,
+    ).run(session.institutionId, questionKey, answerJson, session.id)
+    return { recorded: true }
+  })()
 }
 
 export function completeKioskSession(sessionToken: string, demographicData: Record<string, string>) {
@@ -649,9 +670,18 @@ export function completeKioskSession(sessionToken: string, demographicData: Reco
   if (!session) {
     throw new Error('Invalid or already completed session.')
   }
+
+  const sanitizedDemographics = Object.create(null) as Record<string, string>
+  for (const [key, value] of Object.entries(demographicData)) {
+    if (key === '__proto__' || key === 'prototype' || key === 'constructor') {
+      continue
+    }
+    sanitizedDemographics[key] = value
+  }
+
   db.prepare(
     `UPDATE kiosk_sessions SET demographic_data = ?, completed_at = CURRENT_TIMESTAMP WHERE id = ?`,
-  ).run(JSON.stringify(demographicData), session.id)
+  ).run(JSON.stringify(sanitizedDemographics), session.id)
   return { completed: true }
 }
 
