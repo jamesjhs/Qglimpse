@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { FormEvent } from 'react'
-import { NavLink, Route, Routes, useSearchParams } from 'react-router-dom'
+import { Navigate, NavLink, Route, Routes, useSearchParams } from 'react-router-dom'
 
 type Institution = {
   id: number
@@ -229,7 +229,15 @@ function App() {
     return () => clearTimeout(timer)
   }, [kioskState, kioskCountdown])
 
-  const selectedInstitution = bootstrap?.institutions[0] ?? null
+  const selectedInstitution = useMemo(() => {
+    if (!bootstrap?.institutions?.length) {
+      return null
+    }
+    if (sessionUser?.institutionId) {
+      return bootstrap.institutions.find((institution) => institution.id === sessionUser.institutionId) ?? bootstrap.institutions[0]
+    }
+    return bootstrap.institutions[0]
+  }, [bootstrap, sessionUser])
   const localTime = useMemo(() => {
     if (!selectedInstitution) return 'Unavailable'
     return new Intl.DateTimeFormat(undefined, {
@@ -848,7 +856,7 @@ function App() {
 
   return (
     <Routes>
-      <Route path="/kiosk" element={<KioskFullScreen
+      <Route path="/kiosk" element={sessionUser ? <KioskFullScreen
         institution={selectedInstitution}
         kioskState={kioskState}
         kioskLoading={kioskLoading}
@@ -872,7 +880,7 @@ function App() {
         onComplete={() => void completeKiosk(kioskDemoAnswers)}
         onDemoSkip={() => void advanceKioskDemographic(true)}
         onDemoNext={() => void advanceKioskDemographic(false)}
-      />} />
+      /> : <Navigate to="/auth-core" replace />} />
       <Route path="*" element={
     <div className="min-h-screen bg-slate-50 text-slate-900">
       <header className="border-b border-slate-200 bg-white/90 backdrop-blur">
@@ -1729,15 +1737,80 @@ function App() {
             }
           />
           <Route
+            path="/help"
+            element={
+              <section className="grid gap-6">
+                <article className={statCardClass}>
+                  <h2 className="text-xl font-semibold">Help</h2>
+                  <p className="mt-2 text-sm text-slate-700">
+                    Use this page as the central quick-help reference for staff and administrators.
+                  </p>
+                  <ul className="mt-4 list-disc space-y-2 pl-5 text-sm text-slate-700">
+                    <li>Sign in from <code>/auth-core</code> using your institutional account.</li>
+                    <li>Enable kiosk mode from the Institutions view if visitor collection is paused.</li>
+                    <li>Use Analytics for date-range response summaries and demographic cross-tab views.</li>
+                    <li>Use Profile to update password and 2FA.</li>
+                    <li>Root users can manage SMTP settings and institution lifecycle controls.</li>
+                  </ul>
+                </article>
+              </section>
+            }
+          />
+          <Route
+            path="/privacy"
+            element={
+              <section className="grid gap-6">
+                <article className={statCardClass}>
+                  <h2 className="text-xl font-semibold">Privacy policy</h2>
+                  <p className="mt-2 text-sm text-slate-700">
+                    Quick Glimpse is designed for anonymous visitor feedback. Visitor names, direct contact details,
+                    and other direct identifiers are not required in normal kiosk use.
+                  </p>
+                  <ul className="mt-4 list-disc space-y-2 pl-5 text-sm text-slate-700">
+                    <li>Institution and account administration data is stored for service operation.</li>
+                    <li>Visitor feedback responses are stored with anonymous session linkage for analytics only.</li>
+                    <li>Demographic questions are optional and category-based.</li>
+                    <li>Institution administrators control question configuration and display behavior.</li>
+                  </ul>
+                </article>
+              </section>
+            }
+          />
+          <Route
+            path="/dpia"
+            element={
+              <section className="grid gap-6">
+                <article className={statCardClass}>
+                  <h2 className="text-xl font-semibold">Data Protection Impact Assessment (DPIA) summary</h2>
+                  <p className="mt-2 text-sm text-slate-700">
+                    Quick Glimpse minimises data processing by separating administrator account data from anonymous
+                    visitor response data and limiting root-level visibility to aggregate metrics.
+                  </p>
+                  <ul className="mt-4 list-disc space-y-2 pl-5 text-sm text-slate-700">
+                    <li>Purpose limitation: service-quality measurement and operational insight.</li>
+                    <li>Data minimisation: no required direct identifiers for kiosk respondents.</li>
+                    <li>Access controls: role-based authorization and institution scoping.</li>
+                    <li>Security controls: CSP, HSTS, CORP/COOP, session expiry, and rate limiting.</li>
+                  </ul>
+                </article>
+              </section>
+            }
+          />
+          <Route
             path="/magic-link"
             element={<MagicLinkHandler onSession={(token, user) => { setAuthToken(token); setSessionUser(user) }} />}
           />
         </Routes>
       </main>
       <footer className="border-t border-slate-200 bg-white">
-        <div className="mx-auto flex max-w-6xl flex-col gap-2 px-6 py-6 text-sm text-slate-600 sm:flex-row sm:items-center sm:justify-between">
-          <span>Quick Glimpse</span>
-          <span>Version {bootstrap.app.version}</span>
+        <div className="mx-auto flex max-w-6xl flex-col gap-3 px-6 py-6 text-sm text-slate-600 sm:flex-row sm:items-center sm:justify-between">
+          <span>©J Rowson {new Date().getFullYear()} | jahosi.co.uk</span>
+          <div className="flex flex-wrap items-center gap-3">
+            <NavLink className="underline underline-offset-2" to="/help">Help</NavLink>
+            <NavLink className="underline underline-offset-2" to="/privacy">Privacy policy</NavLink>
+            <NavLink className="underline underline-offset-2" to="/dpia">DPIA</NavLink>
+            <span>Version {bootstrap.app.version}</span>
+          </div>
         </div>
       </footer>
     </div>

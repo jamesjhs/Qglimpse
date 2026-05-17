@@ -221,8 +221,8 @@ All API routes are prefixed `/api/`. Authenticated routes require an `Authorizat
 | `POST` | `/api/institutions/:id/questions` | Root or inst. admin (own) | Create a custom question |
 | `PATCH` | `/api/institutions/:id/questions/:questionId` | Root or inst. admin (own) | Update question settings/schedule |
 | `DELETE` | `/api/institutions/:id/questions/:questionId` | Root or inst. admin (own) | Delete a custom question |
-| `GET` | `/api/institutions/:id/analytics` | Root or inst. admin (own) | Aggregated response analytics (optional `?from=&to=`) |
-| `GET` | `/api/institutions/:id/analytics/cross-tab` | Root or inst. admin (own) | Cross-tabulation of a question by demographic (`?primaryKey=&demographicKey=`) |
+| `GET` | `/api/institutions/:id/analytics` | Root or any institution user (own) | Aggregated response analytics (optional `?from=&to=`) |
+| `GET` | `/api/institutions/:id/analytics/cross-tab` | Root or any institution user (own) | Cross-tabulation of a question by demographic (`?primaryKey=&demographicKey=`) |
 
 ### Kiosk runtime (public)
 

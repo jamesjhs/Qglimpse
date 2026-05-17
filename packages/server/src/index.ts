@@ -871,12 +871,15 @@ export function createApp() {
   app.get('/api/institutions/:id/analytics', privilegedOpsLimiter, (req, res) => {
     const auth = getAuthenticatedSession(req, res)
     if (!auth) return
-    if (!['root', 'institution_admin'].includes(auth.session.user.role)) {
-      return res.status(403).json({ error: 'Admin access required.' })
+    if (!['root', 'institution_admin', 'institution_user'].includes(auth.session.user.role)) {
+      return res.status(403).json({ error: 'Authenticated institution access required.' })
     }
     const institutionId = parseNumericId(req.params.id)
     if (!institutionId) return res.status(400).json({ error: 'Invalid institution id.' })
-    if (auth.session.user.role === 'institution_admin' && auth.session.user.institutionId !== institutionId) {
+    if (
+      ['institution_admin', 'institution_user'].includes(auth.session.user.role) &&
+      auth.session.user.institutionId !== institutionId
+    ) {
       return res.status(403).json({ error: 'Institution-scoped access required.' })
     }
     const from = typeof req.query.from === 'string' ? req.query.from : undefined
@@ -887,12 +890,15 @@ export function createApp() {
   app.get('/api/institutions/:id/analytics/cross-tab', privilegedOpsLimiter, (req, res) => {
     const auth = getAuthenticatedSession(req, res)
     if (!auth) return
-    if (!['root', 'institution_admin'].includes(auth.session.user.role)) {
-      return res.status(403).json({ error: 'Admin access required.' })
+    if (!['root', 'institution_admin', 'institution_user'].includes(auth.session.user.role)) {
+      return res.status(403).json({ error: 'Authenticated institution access required.' })
     }
     const institutionId = parseNumericId(req.params.id)
     if (!institutionId) return res.status(400).json({ error: 'Invalid institution id.' })
-    if (auth.session.user.role === 'institution_admin' && auth.session.user.institutionId !== institutionId) {
+    if (
+      ['institution_admin', 'institution_user'].includes(auth.session.user.role) &&
+      auth.session.user.institutionId !== institutionId
+    ) {
       return res.status(403).json({ error: 'Institution-scoped access required.' })
     }
     const primaryKey = typeof req.query.primaryKey === 'string' ? req.query.primaryKey : null
