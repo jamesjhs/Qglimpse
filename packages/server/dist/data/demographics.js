@@ -37,6 +37,12 @@ export const foundationChecklist = [
     'Institution-local timezone and kiosk mode foundation in place',
     'Root dashboard restricted to aggregate counts',
     'SMTP settings limited to username, password, send address, server, port, and secure type',
+    'Password login with bcrypt, bearer sessions, and account lifecycle management',
+    'Must-change-password flag and self-service password change endpoint',
+    'Password-reset and email-verification flows (preview-mode tokens)',
+    'Email OTP 2FA and magic-link challenge/verify flows',
+    'Institution CRUD with root-only write access',
+    'Delegated user management for institution admins',
 ];
 export const authMethodOptions = [
     {

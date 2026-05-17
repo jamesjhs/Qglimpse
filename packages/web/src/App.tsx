@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { FormEvent } from 'react'
-import { NavLink, Route, Routes } from 'react-router-dom'
+import { NavLink, Route, Routes, useSearchParams } from 'react-router-dom'
 
 type Institution = {
   id: number
@@ -79,6 +79,17 @@ type ChallengePreview = {
   }
 }
 
+type TwoFaPending = {
+  challengePending: true
+  email: string
+  expiresAt: string
+  preview: { otpCode: string }
+}
+
+type LoginResult =
+  | TwoFaPending
+  | { token: string; user: AuthUser; mustChangePassword: boolean }
+
 type AuthUser = {
   id: number
   email: string
@@ -106,6 +117,9 @@ function App() {
   const [authUsers, setAuthUsers] = useState<AuthUser[]>([])
   const [rootOverview, setRootOverview] = useState<RootOverview | null>(null)
   const [smtpSettings, setSmtpSettings] = useState<SmtpSettings | null>(null)
+  const [pendingTwoFa, setPendingTwoFa] = useState<TwoFaPending | null>(null)
+  const [mustChangePw, setMustChangePw] = useState(false)
+  const [institutionList, setInstitutionList] = useState<Institution[]>([])
   const [turnstileToken, setTurnstileToken] = useState('dev-turnstile-pass')
   const [smtpForm, setSmtpForm] = useState<SmtpFormState>({
     username: '',
@@ -327,11 +341,19 @@ function App() {
       throw new Error(result.error ?? 'Unable to login.')
     }
 
-    const result = (await response.json()) as { token: string; user: AuthUser }
-    setAuthToken(result.token)
-    setSessionUser(result.user)
-    if (result.user.role === 'root') {
-      await Promise.all([loadRootOverview(result.token), loadSmtpSettings(result.token)])
+    const result = (await response.json()) as LoginResult
+    if ('challengePending' in result && result.challengePending) {
+      setPendingTwoFa(result)
+      return
+    }
+    const session = result as { token: string; user: AuthUser; mustChangePassword: boolean }
+    setAuthToken(session.token)
+    setSessionUser(session.user)
+    if (session.mustChangePassword) {
+      setMustChangePw(true)
+    }
+    if (session.user.role === 'root') {
+      await Promise.all([loadRootOverview(session.token), loadSmtpSettings(session.token), loadInstitutionList(session.token)])
     }
   }
 
@@ -371,6 +393,109 @@ function App() {
     setAuthUsers([])
     setRootOverview(null)
     setSmtpSettings(null)
+    setPendingTwoFa(null)
+    setMustChangePw(false)
+    setInstitutionList([])
+  }
+
+  const verify2FA = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    if (!pendingTwoFa) return
+    setError(null)
+    const formData = new FormData(event.currentTarget)
+    const response = await fetch('/api/auth/challenges/verify', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: pendingTwoFa.email, code: String(formData.get('code') ?? '') }),
+    })
+    if (!response.ok) {
+      const result = (await response.json()) as { error?: string }
+      throw new Error(result.error ?? 'OTP verification failed.')
+    }
+    const result = (await response.json()) as { token: string; user: AuthUser; mustChangePassword: boolean }
+    setPendingTwoFa(null)
+    setAuthToken(result.token)
+    setSessionUser(result.user)
+    if (result.mustChangePassword) setMustChangePw(true)
+    if (result.user.role === 'root') {
+      await Promise.all([loadRootOverview(result.token), loadSmtpSettings(result.token), loadInstitutionList(result.token)])
+    }
+  }
+
+  const toggle2FA = async (userId: number, enabled: boolean) => {
+    if (!authToken) return
+    const response = await fetch(`/api/auth/users/${userId}/2fa`, {
+      method: 'PATCH',
+      headers: { Authorization: `Bearer ${authToken}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled }),
+    })
+    if (!response.ok) {
+      const result = (await response.json()) as { error?: string }
+      throw new Error(result.error ?? 'Unable to toggle 2FA.')
+    }
+  }
+
+  const changePassword = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    if (!authToken) return
+    setError(null)
+    const formData = new FormData(event.currentTarget)
+    const response = await fetch('/api/auth/profile/password', {
+      method: 'PATCH',
+      headers: { Authorization: `Bearer ${authToken}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        currentPassword: String(formData.get('currentPassword') ?? ''),
+        newPassword: String(formData.get('newPassword') ?? ''),
+      }),
+    })
+    if (!response.ok) {
+      const result = (await response.json()) as { error?: string }
+      throw new Error(result.error ?? 'Unable to change password.')
+    }
+    setMustChangePw(false)
+    event.currentTarget.reset()
+  }
+
+  const loadInstitutionList = async (token: string) => {
+    const response = await fetch('/api/institutions', {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+    if (!response.ok) return
+    const result = (await response.json()) as { institutions: Institution[] }
+    setInstitutionList(result.institutions)
+  }
+
+  const createInstitution = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    if (!authToken) return
+    setError(null)
+    const formData = new FormData(event.currentTarget)
+    const response = await fetch('/api/institutions', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${authToken}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: String(formData.get('name') ?? '') }),
+    })
+    if (!response.ok) {
+      const result = (await response.json()) as { error?: string }
+      throw new Error(result.error ?? 'Unable to create institution.')
+    }
+    const inst = (await response.json()) as Institution
+    setInstitutionList((current) => [...current, inst])
+    event.currentTarget.reset()
+  }
+
+  const deleteInstitution = async (id: number) => {
+    if (!authToken) return
+    setError(null)
+    const response = await fetch(`/api/institutions/${id}`, {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${authToken}` },
+    })
+    if (!response.ok) {
+      const result = (await response.json()) as { error?: string }
+      throw new Error(result.error ?? 'Unable to delete institution.')
+    }
+    setInstitutionList((current) => current.filter((inst) => inst.id !== id))
   }
 
   const loadAuthUsers = async () => {
@@ -442,6 +567,7 @@ function App() {
         <div className="mx-auto flex w-full max-w-6xl gap-2 overflow-x-auto px-6 pb-6">
           <NavLink className={navClass} to="/">Overview</NavLink>
           <NavLink className={navClass} to="/auth-core">Auth core</NavLink>
+          <NavLink className={navClass} to="/profile">Profile</NavLink>
           <NavLink className={navClass} to="/institutions">Institutions</NavLink>
           <NavLink className={navClass} to="/kiosk">Kiosk</NavLink>
           <NavLink className={navClass} to="/root">Root</NavLink>
@@ -545,6 +671,30 @@ function App() {
                       <button className="rounded-full bg-slate-200 px-4 py-2 text-sm font-semibold" onClick={() => void fetchSession().catch((caughtError: unknown) => setError(caughtError instanceof Error ? caughtError.message : 'Session check failed.'))} type="button">Check session</button>
                       <button className="rounded-full bg-slate-200 px-4 py-2 text-sm font-semibold" onClick={() => void logoutAuthUser().catch((caughtError: unknown) => setError(caughtError instanceof Error ? caughtError.message : 'Logout failed.'))} type="button">Logout</button>
                     </div>
+                    {pendingTwoFa ? (
+                      <div className="mt-4 rounded-xl border border-sky-200 bg-sky-50 px-4 py-4 text-sm">
+                        <div className="font-semibold text-sky-900">2FA required</div>
+                        <div className="mt-1 text-sky-700">Enter the OTP sent to {pendingTwoFa.email}</div>
+                        {pendingTwoFa.preview.otpCode ? (
+                          <div className="mt-1 font-mono text-sky-800">Dev preview: {pendingTwoFa.preview.otpCode}</div>
+                        ) : null}
+                        <form className="mt-3 flex gap-2" onSubmit={(event) => void verify2FA(event).catch((err: unknown) => setError(err instanceof Error ? err.message : '2FA failed.'))}>
+                          <input className="rounded-xl border border-slate-300 px-3 py-2 font-mono" name="code" placeholder="000000" required />
+                          <button className="rounded-full bg-sky-700 px-4 py-2 text-sm font-semibold text-white" type="submit">Verify</button>
+                        </form>
+                      </div>
+                    ) : null}
+                    {mustChangePw ? (
+                      <div className="mt-4 rounded-xl border border-amber-300 bg-amber-50 px-4 py-4 text-sm">
+                        <div className="font-semibold text-amber-900">Password change required</div>
+                        <p className="mt-1 text-amber-700">Your account requires a password change before you can continue.</p>
+                        <form className="mt-3 grid gap-2" onSubmit={(event) => void changePassword(event).catch((err: unknown) => setError(err instanceof Error ? err.message : 'Password change failed.'))}>
+                          <input className="rounded-xl border border-slate-300 px-3 py-2" name="currentPassword" placeholder="Current password" required type="password" />
+                          <input className="rounded-xl border border-slate-300 px-3 py-2" name="newPassword" placeholder="New password (min 10 chars)" required type="password" />
+                          <button className="w-fit rounded-full bg-amber-700 px-4 py-2 text-sm font-semibold text-white" type="submit">Change password</button>
+                        </form>
+                      </div>
+                    ) : null}
                     <div className="mt-4 rounded-xl bg-slate-50 px-4 py-3 text-sm text-slate-700">
                       <div className="font-medium text-slate-900">Current session</div>
                       <div>{sessionUser ? `${sessionUser.email} (${sessionUser.role})` : 'No active session loaded'}</div>
@@ -568,6 +718,8 @@ function App() {
                                 {status}
                               </button>
                             ))}
+                            <button className="rounded-full bg-sky-100 px-3 py-1 text-xs font-semibold text-sky-700 ring-1 ring-sky-300" onClick={() => void toggle2FA(user.id, true).catch((err: unknown) => setError(err instanceof Error ? err.message : 'Failed.'))} type="button">2FA on</button>
+                            <button className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-700 ring-1 ring-slate-300" onClick={() => void toggle2FA(user.id, false).catch((err: unknown) => setError(err instanceof Error ? err.message : 'Failed.'))} type="button">2FA off</button>
                           </div>
                         </div>
                       ))}
@@ -604,26 +756,48 @@ function App() {
           <Route
             path="/institutions"
             element={
-              <section className="grid gap-4 md:grid-cols-2">
-                {bootstrap.institutions.map((institution) => (
-                  <article className={statCardClass} key={institution.id}>
-                    <div className="flex flex-wrap items-start justify-between gap-4">
-                      <div>
-                        <p className="text-xs font-semibold uppercase tracking-[0.2em] text-sky-700">Institution</p>
-                        <h2 className="mt-2 text-xl font-semibold">{institution.name}</h2>
-                        <p className="mt-2 text-sm text-slate-600">Slug: {institution.slug}</p>
-                        <p className="mt-1 text-sm text-slate-600">Timezone: {institution.timezone}</p>
-                      </div>
-                      <button
-                        className={`rounded-full px-4 py-2 text-sm font-semibold ${institution.kioskModeEnabled ? 'bg-emerald-600 text-white' : 'bg-slate-200 text-slate-900'}`}
-                        onClick={() => void toggleKioskMode(institution)}
-                        type="button"
-                      >
-                        {institution.kioskModeEnabled ? 'Kiosk on' : 'Kiosk off'}
-                      </button>
+              <section className="grid gap-6">
+                {sessionUser?.role === 'root' ? (
+                  <article className={statCardClass}>
+                    <h2 className="text-xl font-semibold">Manage institutions (root only)</h2>
+                    <form className="mt-4 flex gap-3" onSubmit={(event) => void createInstitution(event).catch((err: unknown) => setError(err instanceof Error ? err.message : 'Failed.'))}>
+                      <input className="flex-1 rounded-xl border border-slate-300 px-3 py-2" name="name" placeholder="Institution name" required />
+                      <button className="rounded-full bg-slate-900 px-4 py-2 text-sm font-semibold text-white" type="submit">Create</button>
+                    </form>
+                    <div className="mt-4 grid gap-3 text-sm">
+                      {institutionList.map((inst) => (
+                        <div className="flex items-center justify-between rounded-xl border border-slate-200 bg-slate-50 px-4 py-3" key={inst.id}>
+                          <div>
+                            <div className="font-medium text-slate-900">{inst.name}</div>
+                            <div className="text-slate-500">{inst.slug} · {inst.timezone}</div>
+                          </div>
+                          <button className="rounded-full bg-red-100 px-3 py-1 text-xs font-semibold text-red-700 ring-1 ring-red-300" onClick={() => void deleteInstitution(inst.id).catch((err: unknown) => setError(err instanceof Error ? err.message : 'Failed.'))} type="button">Delete</button>
+                        </div>
+                      ))}
                     </div>
                   </article>
-                ))}
+                ) : null}
+                <div className="grid gap-4 md:grid-cols-2">
+                  {bootstrap.institutions.map((institution) => (
+                    <article className={statCardClass} key={institution.id}>
+                      <div className="flex flex-wrap items-start justify-between gap-4">
+                        <div>
+                          <p className="text-xs font-semibold uppercase tracking-[0.2em] text-sky-700">Institution</p>
+                          <h2 className="mt-2 text-xl font-semibold">{institution.name}</h2>
+                          <p className="mt-2 text-sm text-slate-600">Slug: {institution.slug}</p>
+                          <p className="mt-1 text-sm text-slate-600">Timezone: {institution.timezone}</p>
+                        </div>
+                        <button
+                          className={`rounded-full px-4 py-2 text-sm font-semibold ${institution.kioskModeEnabled ? 'bg-emerald-600 text-white' : 'bg-slate-200 text-slate-900'}`}
+                          onClick={() => void toggleKioskMode(institution)}
+                          type="button"
+                        >
+                          {institution.kioskModeEnabled ? 'Kiosk on' : 'Kiosk off'}
+                        </button>
+                      </div>
+                    </article>
+                  ))}
+                </div>
               </section>
             }
           />
@@ -792,15 +966,89 @@ function App() {
               </section>
             }
           />
+          <Route
+            path="/profile"
+            element={
+              <section className="grid gap-6 lg:grid-cols-2">
+                <article className={statCardClass}>
+                  <h2 className="text-xl font-semibold">Change password</h2>
+                  {!sessionUser ? (
+                    <p className="mt-3 text-sm text-amber-700">Login required.</p>
+                  ) : (
+                    <form className="mt-4 grid gap-3" onSubmit={(event) => void changePassword(event).catch((err: unknown) => setError(err instanceof Error ? err.message : 'Failed.'))}>
+                      <input className="rounded-xl border border-slate-300 px-3 py-2" name="currentPassword" placeholder="Current password" required type="password" />
+                      <input className="rounded-xl border border-slate-300 px-3 py-2" name="newPassword" placeholder="New password (min 10 chars)" required type="password" />
+                      <button className="w-fit rounded-full bg-slate-900 px-5 py-2.5 text-sm font-semibold text-white" type="submit">Update password</button>
+                    </form>
+                  )}
+                </article>
+                <article className={statCardClass}>
+                  <h2 className="text-xl font-semibold">Two-factor authentication</h2>
+                  <p className="mt-2 text-sm text-slate-600">Enable or disable OTP-based 2FA for your account.</p>
+                  {sessionUser ? (
+                    <div className="mt-4 flex gap-3">
+                      <button className="rounded-full bg-sky-700 px-4 py-2 text-sm font-semibold text-white" onClick={() => void toggle2FA(sessionUser.id, true).catch((err: unknown) => setError(err instanceof Error ? err.message : 'Failed.'))} type="button">Enable 2FA</button>
+                      <button className="rounded-full bg-slate-200 px-4 py-2 text-sm font-semibold text-slate-900" onClick={() => void toggle2FA(sessionUser.id, false).catch((err: unknown) => setError(err instanceof Error ? err.message : 'Failed.'))} type="button">Disable 2FA</button>
+                    </div>
+                  ) : (
+                    <p className="mt-3 text-sm text-amber-700">Login required.</p>
+                  )}
+                </article>
+              </section>
+            }
+          />
+          <Route
+            path="/magic-link"
+            element={<MagicLinkHandler onSession={(token, user) => { setAuthToken(token); setSessionUser(user) }} />}
+          />
         </Routes>
       </main>
-
       <footer className="border-t border-slate-200 bg-white">
         <div className="mx-auto flex max-w-6xl flex-col gap-2 px-6 py-6 text-sm text-slate-600 sm:flex-row sm:items-center sm:justify-between">
           <span>Quick Glimpse foundation scaffold</span>
           <span>Version {bootstrap.app.version}</span>
         </div>
       </footer>
+    </div>
+  )
+}
+
+function MagicLinkHandler({ onSession }: { onSession: (token: string, user: AuthUser) => void }) {
+  const [searchParams] = useSearchParams()
+  const [status, setStatus] = useState<'loading' | 'success' | 'error'>('loading')
+  const [message, setMessage] = useState('')
+
+  useEffect(() => {
+    const token = searchParams.get('token')
+    if (!token) {
+      setStatus('error')
+      setMessage('Missing magic link token.')
+      return
+    }
+    fetch(`/api/auth/magic-link?token=${encodeURIComponent(token)}`)
+      .then(async (response) => {
+        if (!response.ok) {
+          const result = (await response.json()) as { error?: string }
+          throw new Error(result.error ?? 'Invalid or expired magic link.')
+        }
+        return response.json() as Promise<{ token: string; user: AuthUser }>
+      })
+      .then((result) => {
+        onSession(result.token, result.user)
+        setStatus('success')
+        setMessage(`Signed in as ${result.user.email}`)
+      })
+      .catch((err: unknown) => {
+        setStatus('error')
+        setMessage(err instanceof Error ? err.message : 'Magic link failed.')
+      })
+  }, [searchParams, onSession])
+
+  return (
+    <div className="rounded-2xl border border-slate-200 bg-white p-6 text-center shadow-sm">
+      {status === 'loading' ? <p className="text-slate-600">Verifying magic link…</p> : null}
+      {status === 'success' ? <p className="text-emerald-700 font-medium">{message}</p> : null}
+      {status === 'error' ? <p className="text-red-700 font-medium">{message}</p> : null}
     </div>
   )
 }

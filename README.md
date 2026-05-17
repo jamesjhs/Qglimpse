@@ -1,18 +1,17 @@
 # quickglimpse
 
-Quick Glimpse is a Docker-contained PWA for institution-specific visitor insight collection. The scaffold currently covers Step 1 + Step 2 baseline work plus final hardening for auth boundaries and admin workflows.
+Quick Glimpse is a Docker-contained PWA for institution-specific visitor insight collection. The scaffold currently covers Steps 1–4: foundation, auth core, 2FA/magic-link flows, and institution + user administration.
 
 ## Repository layout
 
-- `/home/runner/work/quickglimpse/quickglimpse/packages/web` — React + Vite + Tailwind PWA shell
-- `/home/runner/work/quickglimpse/quickglimpse/packages/server` — Express API, SQLite bootstrap, readiness probe, seed data
-- `/home/runner/work/quickglimpse/quickglimpse/docs/docker-quickstart.md` — local container workflow
-- `/home/runner/work/quickglimpse/quickglimpse/docs/production-hardening.md` — deployment hardening checklist
+- `packages/web` — React + Vite + Tailwind PWA shell
+- `packages/server` — Express API, SQLite, auth, seed data
+- `docs/docker-quickstart.md` — local container workflow
+- `docs/production-hardening.md` — deployment hardening checklist
 
 ## Quick start
 
 ```bash
-cd /home/runner/work/quickglimpse/quickglimpse
 npm install
 npm run build
 npm start
@@ -22,15 +21,21 @@ Then open `http://localhost:3000`.
 
 ## Included foundation capabilities
 
-- Email 2FA demo that offers either one-time code or magic-link delivery
+- Email 2FA: OTP challenge issued on login when enabled; `/api/auth/challenges/verify` issues the session
+- Magic link: server generates a token, SPA handles `/magic-link?token=` after redirect from `/auth/magic-link`
+- Password reset: `POST /api/auth/password-reset/request` (returns dev preview token) + `POST /api/auth/password-reset/confirm`
+- Email verification: `POST /api/auth/email-verify/request` + `POST /api/auth/email-verify/confirm`
+- Delegated user creation: institution admins can `POST /api/institutions/:id/users` (users created with `mustChangePassword: true`)
+- Institution CRUD: root-only `GET/POST /api/institutions`, `GET/PUT/DELETE /api/institutions/:id`; delete blocked if users assigned
+- Profile management: `PATCH /api/auth/profile` (email), `PATCH /api/auth/profile/password` (change own password)
 - Auth core with registration/login, session issuance + validation + logout, and account status lifecycle updates
-- Institution-local timezone on the seeded sample institution
+- `mustChangePassword` returned in login response; 2FA toggle via `PATCH /api/auth/users/:id/2fa`
 - Institution kiosk-mode toggle persisted in SQLite with institution-scoped admin authorization
 - Confirmed demographics question bank seeded into template and institution copies
 - Root overview limited to aggregate counts only and restricted to root sessions
-- SMTP settings limited to username, password, send address, server address, port, and secure login type, restricted to root sessions
+- SMTP settings limited to the approved field set, restricted to root sessions
 - `/readyz` health endpoint, Docker baseline, and PM2 ecosystem file
-- API hardening with security headers, strict ID validation, and reduced sensitive bootstrap payload exposure
+- Rate limiters bypass in dev mode (when `TURNSTILE_SECRET_KEY` is not set)
 
 ## Auth seed accounts (local defaults)
 
@@ -38,34 +43,44 @@ Then open `http://localhost:3000`.
 - Institution admin: `institution-admin@quickglimpse.local` / `ChangeMeInstitution123!`
 - Turnstile dev bypass token (when no `TURNSTILE_SECRET_KEY` is set): `dev-turnstile-pass`
 
-## User-facing workflow (institution users)
+## User-facing workflow
 
-1. Open the web app and sign in through **Auth core**.
-2. Use email/password login with Turnstile token.
-3. Optionally generate OTP/magic-link demo challenge previews (development/demo flow only).
-4. Kiosk usage remains institution-local and tied to institution timezone.
+1. Sign in via **Auth core** with email + password.
+2. If 2FA is enabled, enter the OTP code in the challenge form.
+3. If `mustChangePassword` is true, a banner prompts the user to change their password immediately.
+4. Manage 2FA and change password from the **Profile** tab.
+5. Follow a magic link — the server redirects to `/magic-link?token=…` which logs you in automatically.
 
-## Admin-facing workflow
+## Admin workflows
 
 ### Institution admin
 - Can sign in and manage kiosk mode **only for their own institution**.
-- Cannot access root analytics or SMTP configuration.
+- Can create users via `POST /api/institutions/:id/users` (own institution only).
+- Can list users in their institution via `GET /api/institutions/:id/users`.
 
 ### Root admin
 - Can access aggregate-only root overview metrics.
-- Can list users and update user lifecycle status (`active`, `suspended`, `deactivated`) with root self-protection.
-- Can read/update SMTP settings with the approved field set only.
+- Can list all users, update user lifecycle status and toggle 2FA.
+- Can read/update SMTP settings.
+- Full institution CRUD: create, rename, delete (blocked if users assigned).
 
-## Developer-facing notes
+## API summary (new in Steps 2–4)
 
-- Public bootstrap data intentionally excludes sensitive operational data (SMTP and root analytics).
-- Sensitive endpoints require bearer sessions:
-  - `GET /api/root/overview` (root only)
-  - `GET /api/settings/smtp` (root only)
-  - `PUT /api/settings/smtp` (root only)
-  - `POST /api/institutions/:id/kiosk-mode` (root or institution_admin, institution scoped for institution admins)
-- Login challenge records are periodically cleaned up to reduce DB growth from expired/consumed rows.
-- API responses include baseline security headers and `Cache-Control: no-store` for `/api/*`.
+| Method | Path | Access |
+|--------|------|--------|
+| `POST` | `/api/auth/challenges/verify` | Public |
+| `GET` | `/api/auth/magic-link?token=` | Public |
+| `POST` | `/api/auth/password-reset/request` | Public |
+| `POST` | `/api/auth/password-reset/confirm` | Public |
+| `POST` | `/api/auth/email-verify/request` | Authenticated |
+| `POST` | `/api/auth/email-verify/confirm` | Public |
+| `PATCH` | `/api/auth/users/:id/2fa` | Self or root |
+| `PATCH` | `/api/auth/profile` | Authenticated |
+| `PATCH` | `/api/auth/profile/password` | Authenticated |
+| `GET/POST` | `/api/institutions` | Root |
+| `GET/PUT/DELETE` | `/api/institutions/:id` | Root |
+| `GET` | `/api/institutions/:id/users` | Root or institution_admin (own) |
+| `POST` | `/api/institutions/:id/users` | Root or institution_admin (own) |
 
 ## Validation
 

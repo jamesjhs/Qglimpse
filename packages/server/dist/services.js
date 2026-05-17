@@ -2,7 +2,7 @@ import { createHash, randomBytes, randomInt } from 'node:crypto';
 import { getDb } from './db.js';
 import { authMethodOptions, demographicsTemplates, foundationChecklist } from './data/demographics.js';
 import { config } from './config.js';
-import { userStatuses } from './auth.js';
+import { registerUser, userStatuses, } from './auth.js';
 const parseOptions = (value) => JSON.parse(value);
 function normalizeEmail(email) {
     return email.trim().toLowerCase();
@@ -98,6 +98,120 @@ export function createLoginChallenge(email, method) {
             : { magicLink: `${config.baseUrl}/auth/magic-link?token=${encodeURIComponent(magicToken ?? '')}` },
     };
 }
+export function requestPasswordReset(email) {
+    const db = getDb();
+    db.prepare(`DELETE FROM login_challenges
+      WHERE method = 'password_reset'
+        AND (datetime(expires_at) < datetime('now', '-1 day') OR consumed_at IS NOT NULL)`).run();
+    const normalizedEmail = email.trim().toLowerCase();
+    const user = db.prepare('SELECT id FROM users WHERE email = ?').get(normalizedEmail);
+    if (!user) {
+        return {};
+    }
+    const rawToken = randomBytes(24).toString('base64url');
+    const expiresAt = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+    db.prepare(`INSERT INTO login_challenges (email, method, magic_token_hash, expires_at) VALUES (?, ?, ?, ?)`).run(normalizedEmail, 'password_reset', createHash('sha256').update(rawToken).digest('hex'), expiresAt);
+    return { preview: { token: rawToken } };
+}
+export function requestEmailVerification(userId) {
+    const db = getDb();
+    const user = db.prepare('SELECT email FROM users WHERE id = ?').get(userId);
+    if (!user) {
+        throw new Error('User not found.');
+    }
+    db.prepare(`DELETE FROM login_challenges
+      WHERE method = 'email_verify'
+        AND (datetime(expires_at) < datetime('now', '-1 day') OR consumed_at IS NOT NULL)`).run();
+    const rawToken = randomBytes(24).toString('base64url');
+    const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+    db.prepare(`INSERT INTO login_challenges (email, method, magic_token_hash, expires_at) VALUES (?, ?, ?, ?)`).run(user.email, 'email_verify', createHash('sha256').update(rawToken).digest('hex'), expiresAt);
+    return { previewToken: rawToken };
+}
+export function confirmEmailVerification(token) {
+    const db = getDb();
+    const tokenHash = createHash('sha256').update(token).digest('hex');
+    const challenge = db
+        .prepare(`SELECT id, email FROM login_challenges
+       WHERE method = 'email_verify'
+         AND magic_token_hash = ?
+         AND consumed_at IS NULL
+         AND datetime(expires_at) > datetime('now')`)
+        .get(tokenHash);
+    if (!challenge) {
+        throw new Error('Invalid or expired verification token.');
+    }
+    db.prepare('UPDATE users SET email_verified = 1 WHERE email = ?').run(challenge.email);
+    db.prepare('UPDATE login_challenges SET consumed_at = CURRENT_TIMESTAMP WHERE id = ?').run(challenge.id);
+}
+export function createInstitution(input) {
+    const db = getDb();
+    const existing = db.prepare('SELECT id FROM institutions WHERE slug = ?').get(input.slug);
+    if (existing) {
+        throw new Error('An institution with this slug already exists.');
+    }
+    const result = db
+        .prepare('INSERT INTO institutions (name, slug, timezone, kiosk_mode_enabled) VALUES (?, ?, ?, 0)')
+        .run(input.name, input.slug, input.timezone);
+    const id = Number(result.lastInsertRowid);
+    return db
+        .prepare('SELECT id, name, slug, timezone, kiosk_mode_enabled AS kioskModeEnabled, created_at AS createdAt FROM institutions WHERE id = ?')
+        .get(id);
+}
+export function getInstitution(id) {
+    const db = getDb();
+    return (db
+        .prepare('SELECT id, name, slug, timezone, kiosk_mode_enabled AS kioskModeEnabled, created_at AS createdAt FROM institutions WHERE id = ?')
+        .get(id) ?? null);
+}
+export function updateInstitution(id, input) {
+    const db = getDb();
+    const institution = db.prepare('SELECT id FROM institutions WHERE id = ?').get(id);
+    if (!institution) {
+        throw new Error('Institution not found.');
+    }
+    const slugConflict = db
+        .prepare('SELECT id FROM institutions WHERE slug = ? AND id != ?')
+        .get(input.slug, id);
+    if (slugConflict) {
+        throw new Error('An institution with this slug already exists.');
+    }
+    db.prepare('UPDATE institutions SET name = ?, slug = ?, timezone = ? WHERE id = ?').run(input.name, input.slug, input.timezone, id);
+    return db
+        .prepare('SELECT id, name, slug, timezone, kiosk_mode_enabled AS kioskModeEnabled, created_at AS createdAt FROM institutions WHERE id = ?')
+        .get(id);
+}
+export function deleteInstitution(id) {
+    const db = getDb();
+    const institution = db.prepare('SELECT id FROM institutions WHERE id = ?').get(id);
+    if (!institution) {
+        throw new Error('Institution not found.');
+    }
+    const userCount = db.prepare('SELECT COUNT(*) as count FROM users WHERE institution_id = ?').get(id);
+    if (userCount.count > 0) {
+        throw new Error('Cannot delete institution with assigned users.');
+    }
+    db.prepare('DELETE FROM institutions WHERE id = ?').run(id);
+}
+export function listInstitutionUsers(institutionId) {
+    const db = getDb();
+    return db
+        .prepare(`SELECT u.id, u.email, u.role, u.status, u.institution_id AS institutionId,
+              u.created_at AS createdAt, u.last_login_at AS lastLoginAt,
+              u.two_fa_enabled AS twoFaEnabled
+       FROM users u
+       WHERE u.institution_id = ?
+       ORDER BY u.id`)
+        .all(institutionId);
+}
+export function createInstitutionUser(institutionId, input) {
+    return registerUser({
+        email: input.email,
+        password: input.password,
+        role: input.role ?? 'institution_user',
+        institutionId,
+        mustChangePassword: true,
+    });
+}
 export function buildBootstrapPayload() {
     return {
         app: {
@@ -111,8 +225,8 @@ export function buildBootstrapPayload() {
         demographics: listDemographics(),
         foundationChecklist,
         roadmapSnapshot: {
-            currentStep: 'Step 2 auth core',
-            nextStep: 'Step 3 emailed OTP + magic link 2FA flow completion',
+            currentStep: 'Step 4 institution + user administration',
+            nextStep: 'Step 5 question system core',
             questionBankSeeded: demographicsTemplates.length,
         },
         authCore: {

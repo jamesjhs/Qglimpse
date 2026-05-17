@@ -1,4 +1,4 @@
-import { createHash, randomBytes } from 'node:crypto'
+import { createHash, randomBytes, randomInt } from 'node:crypto'
 import { compareSync, hashSync } from 'bcryptjs'
 import { getDb } from './db.js'
 import { config } from './config.js'
@@ -18,6 +18,8 @@ type UserRow = {
   createdAt: string
   lastLoginAt: string | null
   deactivatedAt: string | null
+  twoFaEnabled?: number
+  mustChangePassword?: number
 }
 
 export type SessionUser = {
@@ -32,7 +34,12 @@ export type SessionResult = {
   token: string
   expiresAt: string
   user: SessionUser
+  mustChangePassword?: boolean
 }
+
+export type LoginResult =
+  | { challengePending: true; email: string; expiresAt: string; preview: { otpCode: string } }
+  | (SessionResult & { mustChangePassword: boolean })
 
 function normalizeEmail(email: string) {
   return email.trim().toLowerCase()
@@ -180,7 +187,9 @@ export function loginUser(input: { email: string; password: string }) {
          u.created_at AS createdAt,
          u.last_login_at AS lastLoginAt,
          u.deactivated_at AS deactivatedAt,
-         c.password_hash AS passwordHash
+         u.two_fa_enabled AS twoFaEnabled,
+         c.password_hash AS passwordHash,
+         c.must_change_password AS mustChangePassword
        FROM users u
        JOIN user_credentials c ON c.user_id = u.id
        WHERE u.email = ?`,
@@ -195,7 +204,21 @@ export function loginUser(input: { email: string; password: string }) {
     throw new Error(`Account is ${row.status}.`)
   }
 
-  return createSessionForUser(mapUser(row))
+  if (row.twoFaEnabled) {
+    db.prepare(
+      `DELETE FROM login_challenges
+        WHERE datetime(expires_at) < datetime('now', '-1 day')
+           OR consumed_at IS NOT NULL`,
+    ).run()
+    const expiresAt = new Date(Date.now() + 10 * 60 * 1000).toISOString()
+    const otpCode = `${randomInt(100000, 999999)}`
+    db.prepare(
+      `INSERT INTO login_challenges (email, method, otp_code_hash, expires_at) VALUES (?, ?, ?, ?)`,
+    ).run(email, 'email_code', createHash('sha256').update(otpCode).digest('hex'), expiresAt)
+    return { challengePending: true as const, email, expiresAt, preview: { otpCode } }
+  }
+
+  return { ...createSessionForUser(mapUser(row)), mustChangePassword: Boolean(row.mustChangePassword) }
 }
 
 export function authenticateSession(token: string) {
@@ -255,12 +278,15 @@ export function listUsers() {
   const db = getDb()
   return db
     .prepare(
-      `SELECT id, email, role, status, institution_id AS institutionId, created_at AS createdAt,
-              last_login_at AS lastLoginAt, deactivated_at AS deactivatedAt
-       FROM users
-       ORDER BY id`,
+      `SELECT u.id, u.email, u.role, u.status, u.institution_id AS institutionId,
+              u.created_at AS createdAt, u.last_login_at AS lastLoginAt,
+              u.deactivated_at AS deactivatedAt, u.two_fa_enabled AS twoFaEnabled,
+              COALESCE(c.must_change_password, 0) AS mustChangePassword
+       FROM users u
+       LEFT JOIN user_credentials c ON c.user_id = u.id
+       ORDER BY u.id`,
     )
-    .all() as UserRow[]
+    .all()
 }
 
 export function updateUserStatus(id: number, status: UserStatus) {
@@ -327,4 +353,164 @@ export function ensureSeedCredentials() {
       ).run(user.id, hashSync(seedUser.password, 12), seedUser.mustChangePassword ? 1 : 0)
     }
   }
+}
+
+export function changeOwnPassword(userId: number, currentPassword: string, newPassword: string) {
+  const db = getDb()
+  const row = db
+    .prepare('SELECT password_hash FROM user_credentials WHERE user_id = ?')
+    .get(userId) as { password_hash: string } | undefined
+  if (!row || !compareSync(currentPassword, row.password_hash)) {
+    throw new Error('Current password is incorrect.')
+  }
+  db.prepare(
+    'UPDATE user_credentials SET password_hash = ?, must_change_password = 0, updated_at = CURRENT_TIMESTAMP WHERE user_id = ?',
+  ).run(hashSync(newPassword, 12), userId)
+}
+
+export function toggle2FA(targetUserId: number, enabled: boolean, requestingUser: SessionUser) {
+  const db = getDb()
+  const target = db.prepare('SELECT id FROM users WHERE id = ?').get(targetUserId) as { id: number } | undefined
+  if (!target) {
+    throw new Error('User not found.')
+  }
+  if (requestingUser.role !== 'root' && requestingUser.id !== targetUserId) {
+    throw new Error('You can only manage 2FA for yourself.')
+  }
+  db.prepare('UPDATE users SET two_fa_enabled = ? WHERE id = ?').run(enabled ? 1 : 0, targetUserId)
+}
+
+export function updateUserEmail(userId: number, newEmail: string) {
+  const db = getDb()
+  const email = normalizeEmail(newEmail)
+  const currentUser = db.prepare('SELECT email FROM users WHERE id = ?').get(userId) as { email: string } | undefined
+  if (!currentUser) {
+    throw new Error('User not found.')
+  }
+  if (email === currentUser.email) {
+    return
+  }
+  const existing = db
+    .prepare('SELECT id FROM users WHERE email = ? AND id != ?')
+    .get(email, userId) as { id: number } | undefined
+  if (existing) {
+    throw new Error('This email is already in use.')
+  }
+  db.prepare('UPDATE users SET email = ?, email_verified = 0 WHERE id = ?').run(email, userId)
+}
+
+export function confirmPasswordReset(token: string, newPassword: string) {
+  const db = getDb()
+  const tokenHash = createHash('sha256').update(token).digest('hex')
+  const challenge = db
+    .prepare(
+      `SELECT id, email FROM login_challenges
+       WHERE method = 'password_reset'
+         AND magic_token_hash = ?
+         AND consumed_at IS NULL
+         AND datetime(expires_at) > datetime('now')`,
+    )
+    .get(tokenHash) as { id: number; email: string } | undefined
+  if (!challenge) {
+    throw new Error('Invalid or expired reset token.')
+  }
+  const user = db.prepare('SELECT id FROM users WHERE email = ?').get(challenge.email) as { id: number } | undefined
+  if (!user) {
+    throw new Error('User not found.')
+  }
+  db.prepare(
+    'UPDATE user_credentials SET password_hash = ?, must_change_password = 0, updated_at = CURRENT_TIMESTAMP WHERE user_id = ?',
+  ).run(hashSync(newPassword, 12), user.id)
+  db.prepare('UPDATE login_challenges SET consumed_at = CURRENT_TIMESTAMP WHERE id = ?').run(challenge.id)
+}
+
+export function verifyOtpChallenge(email: string, code: string): SessionResult & { mustChangePassword: boolean } {
+  const db = getDb()
+  const normalizedEmail = normalizeEmail(email)
+  const codeHash = createHash('sha256').update(code).digest('hex')
+  const challenge = db
+    .prepare(
+      `SELECT id FROM login_challenges
+       WHERE method = 'email_code'
+         AND email = ?
+         AND otp_code_hash = ?
+         AND consumed_at IS NULL
+         AND datetime(expires_at) > datetime('now')
+       ORDER BY created_at DESC
+       LIMIT 1`,
+    )
+    .get(normalizedEmail, codeHash) as { id: number } | undefined
+  if (!challenge) {
+    throw new Error('Invalid or expired code.')
+  }
+  const userRow = db
+    .prepare(
+      `SELECT u.id, u.email, u.role, u.status, u.institution_id AS institutionId,
+              COALESCE(c.must_change_password, 0) AS mustChangePassword
+       FROM users u
+       LEFT JOIN user_credentials c ON c.user_id = u.id
+       WHERE u.email = ? AND u.status = 'active'`,
+    )
+    .get(normalizedEmail) as {
+      id: number
+      email: string
+      role: UserRole
+      status: UserStatus
+      institutionId: number | null
+      mustChangePassword: number
+    } | undefined
+  if (!userRow) {
+    throw new Error('User not found or inactive.')
+  }
+  db.prepare('UPDATE login_challenges SET consumed_at = CURRENT_TIMESTAMP WHERE id = ?').run(challenge.id)
+  const session = createSessionForUser({
+    id: userRow.id,
+    email: userRow.email,
+    role: userRow.role,
+    status: userRow.status,
+    institutionId: userRow.institutionId,
+  })
+  return { ...session, mustChangePassword: Boolean(userRow.mustChangePassword) }
+}
+
+export function verifyMagicLinkChallenge(token: string): SessionResult {
+  const db = getDb()
+  const tokenHash = createHash('sha256').update(token).digest('hex')
+  const challenge = db
+    .prepare(
+      `SELECT id, email FROM login_challenges
+       WHERE method = 'magic_link'
+         AND magic_token_hash = ?
+         AND consumed_at IS NULL
+         AND datetime(expires_at) > datetime('now')
+       ORDER BY created_at DESC
+       LIMIT 1`,
+    )
+    .get(tokenHash) as { id: number; email: string } | undefined
+  if (!challenge) {
+    throw new Error('Invalid or expired magic link.')
+  }
+  const userRow = db
+    .prepare(
+      `SELECT id, email, role, status, institution_id AS institutionId
+       FROM users WHERE email = ? AND status = 'active'`,
+    )
+    .get(challenge.email) as {
+      id: number
+      email: string
+      role: UserRole
+      status: UserStatus
+      institutionId: number | null
+    } | undefined
+  if (!userRow) {
+    throw new Error('User not found or inactive.')
+  }
+  db.prepare('UPDATE login_challenges SET consumed_at = CURRENT_TIMESTAMP WHERE id = ?').run(challenge.id)
+  return createSessionForUser({
+    id: userRow.id,
+    email: userRow.email,
+    role: userRow.role,
+    status: userRow.status,
+    institutionId: userRow.institutionId,
+  })
 }

@@ -112,6 +112,12 @@ function runMigrations(db) {
     if (!columnNames.has('deactivated_at')) {
         db.exec(`ALTER TABLE users ADD COLUMN deactivated_at TEXT;`);
     }
+    if (!columnNames.has('email_verified')) {
+        db.exec(`ALTER TABLE users ADD COLUMN email_verified INTEGER NOT NULL DEFAULT 0;`);
+    }
+    if (!columnNames.has('two_fa_enabled')) {
+        db.exec(`ALTER TABLE users ADD COLUMN two_fa_enabled INTEGER NOT NULL DEFAULT 0;`);
+    }
 }
 function seedInstitution(db) {
     const existing = db.prepare('SELECT id FROM institutions ORDER BY id LIMIT 1').get();
