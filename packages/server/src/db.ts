@@ -2,7 +2,7 @@ import { mkdirSync } from 'node:fs'
 import path from 'node:path'
 import Database from 'better-sqlite3'
 import { config } from './config.js'
-import { demographicsTemplates } from './data/demographics.js'
+import { demographicsTemplates, insightTemplates } from './data/demographics.js'
 
 let database: Database.Database | undefined
 
@@ -101,7 +101,18 @@ function runMigrations(db: Database.Database) {
       institution_id INTEGER NOT NULL,
       question_key TEXT NOT NULL,
       answer_json TEXT NOT NULL,
+      kiosk_session_id INTEGER REFERENCES kiosk_sessions(id) ON DELETE SET NULL,
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (institution_id) REFERENCES institutions(id) ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS kiosk_sessions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      institution_id INTEGER NOT NULL,
+      session_token TEXT NOT NULL UNIQUE,
+      demographic_data TEXT NOT NULL DEFAULT '{}',
+      started_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      completed_at TEXT,
       FOREIGN KEY (institution_id) REFERENCES institutions(id) ON DELETE CASCADE
     );
   `)
@@ -118,6 +129,51 @@ function runMigrations(db: Database.Database) {
   }
   if (!columnNames.has('deactivated_at')) {
     db.exec(`ALTER TABLE users ADD COLUMN deactivated_at TEXT;`)
+  }
+  if (!columnNames.has('email_verified')) {
+    db.exec(`ALTER TABLE users ADD COLUMN email_verified INTEGER NOT NULL DEFAULT 0;`)
+  }
+  if (!columnNames.has('two_fa_enabled')) {
+    db.exec(`ALTER TABLE users ADD COLUMN two_fa_enabled INTEGER NOT NULL DEFAULT 0;`)
+  }
+
+  const iqColumns = db
+    .prepare(`PRAGMA table_info(institution_questions)`)
+    .all() as Array<{ name: string }>
+  const iqColNames = new Set(iqColumns.map((c) => c.name))
+  if (!iqColNames.has('include_in_kiosk')) {
+    db.exec(`ALTER TABLE institution_questions ADD COLUMN include_in_kiosk INTEGER NOT NULL DEFAULT 1;`)
+  }
+  if (!iqColNames.has('is_demographic')) {
+    db.exec(`ALTER TABLE institution_questions ADD COLUMN is_demographic INTEGER NOT NULL DEFAULT 0;`)
+  }
+  if (!iqColNames.has('display_order')) {
+    db.exec(`ALTER TABLE institution_questions ADD COLUMN display_order INTEGER NOT NULL DEFAULT 0;`)
+  }
+  if (!iqColNames.has('schedule_days')) {
+    db.exec(`ALTER TABLE institution_questions ADD COLUMN schedule_days TEXT NOT NULL DEFAULT '[]';`)
+  }
+  if (!iqColNames.has('schedule_start_time')) {
+    db.exec(`ALTER TABLE institution_questions ADD COLUMN schedule_start_time TEXT;`)
+  }
+  if (!iqColNames.has('schedule_end_time')) {
+    db.exec(`ALTER TABLE institution_questions ADD COLUMN schedule_end_time TEXT;`)
+  }
+
+  const qtColumns = db
+    .prepare(`PRAGMA table_info(question_templates)`)
+    .all() as Array<{ name: string }>
+  const qtColNames = new Set(qtColumns.map((c) => c.name))
+  if (!qtColNames.has('is_demographic')) {
+    db.exec(`ALTER TABLE question_templates ADD COLUMN is_demographic INTEGER NOT NULL DEFAULT 0;`)
+  }
+
+  const respColumns = db
+    .prepare(`PRAGMA table_info(responses)`)
+    .all() as Array<{ name: string }>
+  const respColNames = new Set(respColumns.map((c) => c.name))
+  if (!respColNames.has('kiosk_session_id')) {
+    db.exec(`ALTER TABLE responses ADD COLUMN kiosk_session_id INTEGER REFERENCES kiosk_sessions(id) ON DELETE SET NULL;`)
   }
 }
 
@@ -150,23 +206,42 @@ function seedUsers(db: Database.Database, institutionId: number) {
 
 function seedQuestionTemplates(db: Database.Database, institutionId: number) {
   const insertTemplate = db.prepare(
-    `INSERT OR IGNORE INTO question_templates (template_key, question_type, prompt, options_json)
-     VALUES (@template_key, @question_type, @prompt, @options_json)`,
+    `INSERT OR IGNORE INTO question_templates (template_key, question_type, prompt, options_json, is_demographic)
+     VALUES (@template_key, @question_type, @prompt, @options_json, @is_demographic)`,
   )
   const cloneTemplate = db.prepare(
-    `INSERT OR IGNORE INTO institution_questions (institution_id, template_key, question_type, prompt, options_json)
-     VALUES (@institution_id, @template_key, @question_type, @prompt, @options_json)`,
+    `INSERT OR IGNORE INTO institution_questions
+       (institution_id, template_key, question_type, prompt, options_json, is_demographic, display_order)
+     VALUES (@institution_id, @template_key, @question_type, @prompt, @options_json, @is_demographic, @display_order)`,
+  )
+  const updateDemographicFlag = db.prepare(
+    `UPDATE question_templates SET is_demographic = 1 WHERE template_key = ?`,
   )
 
+  let order = 0
   for (const template of demographicsTemplates) {
     const row = {
       template_key: template.key,
       question_type: template.type,
       prompt: template.prompt,
       options_json: JSON.stringify(template.options),
+      is_demographic: 1,
     }
     insertTemplate.run(row)
-    cloneTemplate.run({ ...row, institution_id: institutionId })
+    updateDemographicFlag.run(template.key)
+    cloneTemplate.run({ ...row, institution_id: institutionId, display_order: order++ })
+  }
+
+  for (const template of insightTemplates) {
+    const row = {
+      template_key: template.key,
+      question_type: template.type,
+      prompt: template.prompt,
+      options_json: JSON.stringify(template.options),
+      is_demographic: 0,
+    }
+    insertTemplate.run(row)
+    cloneTemplate.run({ ...row, institution_id: institutionId, display_order: order++ })
   }
 }
 
