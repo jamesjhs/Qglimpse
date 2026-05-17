@@ -1015,17 +1015,15 @@ function App() {
 
 function MagicLinkHandler({ onSession }: { onSession: (token: string, user: AuthUser) => void }) {
   const [searchParams] = useSearchParams()
-  const [status, setStatus] = useState<'loading' | 'success' | 'error'>('loading')
-  const [message, setMessage] = useState('')
+  const tokenParam = searchParams.get('token')
+  const [status, setStatus] = useState<'loading' | 'success' | 'error'>(() => (tokenParam ? 'loading' : 'error'))
+  const [message, setMessage] = useState(() => (tokenParam ? '' : 'Missing magic link token.'))
 
   useEffect(() => {
-    const token = searchParams.get('token')
-    if (!token) {
-      setStatus('error')
-      setMessage('Missing magic link token.')
+    if (!tokenParam) {
       return
     }
-    fetch(`/api/auth/magic-link?token=${encodeURIComponent(token)}`)
+    fetch(`/api/auth/magic-link?token=${encodeURIComponent(tokenParam)}`)
       .then(async (response) => {
         if (!response.ok) {
           const result = (await response.json()) as { error?: string }
@@ -1042,7 +1040,7 @@ function MagicLinkHandler({ onSession }: { onSession: (token: string, user: Auth
         setStatus('error')
         setMessage(err instanceof Error ? err.message : 'Magic link failed.')
       })
-  }, [searchParams, onSession])
+  }, [tokenParam, onSession])
 
   return (
     <div className="rounded-2xl border border-slate-200 bg-white p-6 text-center shadow-sm">
