@@ -1,11 +1,25 @@
 # quickglimpse
 
-Quick Glimpse is a Docker-contained PWA for institution-specific visitor insight collection. The scaffold currently covers Steps 1–4: foundation, auth core, 2FA/magic-link flows, and institution + user administration.
+Quick Glimpse is a Docker-contained PWA for institution-specific visitor insight collection. Steps 1–10 are complete, covering the full feature set from auth core through kiosk runtime, analytics, and SMTP integration.
+
+## Features
+
+- **Multi-institution support** — create, manage, and isolate multiple institutions under a single root account
+- **Full authentication** — email/password login, email 2FA, magic-link sign-in, password reset, email verification
+- **Question bank management** — global template library cloned per institution; custom questions; scheduling by day and time window
+- **Kiosk runtime** — per-institution kiosk mode with session tracking, answer submission, and demographic capture at completion
+- **Analytics with cross-tabulation** — per-institution response summaries with demographic breakdown
+- **SMTP with test email** — runtime SMTP configuration stored in the database; test-email endpoint for validation
+- **Docker support** — single-container image with named volume persistence and a docker-compose workflow
 
 ## Repository layout
 
 - `packages/web` — React + Vite + Tailwind PWA shell
 - `packages/server` — Express API, SQLite, auth, seed data
+- `docs/install.md` — prerequisites, environment variables, first-run steps
+- `docs/troubleshooting.md` — common issues and fixes
+- `docs/technical.md` — architecture, schema, API reference, rate limiting, security headers
+- `docs/simple-guide.md` — plain-English guide for non-technical staff
 - `docs/docker-quickstart.md` — local container workflow
 - `docs/production-hardening.md` — deployment hardening checklist
 
@@ -64,7 +78,9 @@ Then open `http://localhost:3000`.
 - Can read/update SMTP settings.
 - Full institution CRUD: create, rename, delete (blocked if users assigned).
 
-## API summary (new in Steps 2–4)
+## API summary (Steps 2–10)
+
+See [docs/technical.md](docs/technical.md) for the full API reference. Key route groups:
 
 | Method | Path | Access |
 |--------|------|--------|
@@ -81,6 +97,16 @@ Then open `http://localhost:3000`.
 | `GET/PUT/DELETE` | `/api/institutions/:id` | Root |
 | `GET` | `/api/institutions/:id/users` | Root or institution_admin (own) |
 | `POST` | `/api/institutions/:id/users` | Root or institution_admin (own) |
+| `GET/POST/PATCH/DELETE` | `/api/institutions/:id/questions` | Root or institution_admin (own) |
+| `GET` | `/api/institutions/:id/analytics` | Root or institution_admin (own) |
+| `GET` | `/api/institutions/:id/analytics/cross-tab` | Root or institution_admin (own) |
+| `GET/POST` | `/api/kiosk/:slug/session` | Public |
+| `POST` | `/api/kiosk/answer` | Public |
+| `POST` | `/api/kiosk/complete` | Public |
+| `GET/PUT` | `/api/settings/smtp` | Root |
+| `POST` | `/api/settings/smtp/test` | Root |
+| `GET` | `/api/root/overview` | Root |
+| `GET` | `/api/question-templates` | Authenticated |
 
 ## Validation
 
