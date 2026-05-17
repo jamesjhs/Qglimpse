@@ -175,6 +175,24 @@ function runMigrations(db: Database.Database) {
   if (!respColNames.has('kiosk_session_id')) {
     db.exec(`ALTER TABLE responses ADD COLUMN kiosk_session_id INTEGER REFERENCES kiosk_sessions(id) ON DELETE SET NULL;`)
   }
+
+  db.exec(`
+    DELETE FROM responses
+    WHERE kiosk_session_id IS NOT NULL
+      AND id NOT IN (
+        SELECT MAX(id)
+        FROM responses
+        WHERE kiosk_session_id IS NOT NULL
+        GROUP BY kiosk_session_id, question_key
+      );
+
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_responses_session_question_unique
+      ON responses (kiosk_session_id, question_key)
+      WHERE kiosk_session_id IS NOT NULL;
+
+    CREATE INDEX IF NOT EXISTS idx_login_challenges_email_method_active
+      ON login_challenges (email, method, consumed_at, expires_at, created_at);
+  `)
 }
 
 function seedInstitution(db: Database.Database): SeedInstitution {
