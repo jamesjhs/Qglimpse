@@ -433,3 +433,7 @@ FodyWeavers.xsd
 *.msix
 *.msm
 *.msp
+/.data
+/packages
+/packages/web
+/packages/server/dist
