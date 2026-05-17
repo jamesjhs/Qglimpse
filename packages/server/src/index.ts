@@ -95,6 +95,13 @@ const fallbackLimiter = rateLimit({
   legacyHeaders: false,
 })
 
+const privilegedOpsLimiter = rateLimit({
+  windowMs: 5 * 60 * 1000,
+  limit: 40,
+  standardHeaders: true,
+  legacyHeaders: false,
+})
+
 function extractBearerToken(headerValue?: string) {
   if (!headerValue) {
     return null
@@ -108,8 +115,9 @@ function extractBearerToken(headerValue?: string) {
   return token
 }
 
-function parseNumericId(value: string) {
-  const parsed = Number(value)
+function parseNumericId(value: string | string[] | undefined) {
+  const raw = Array.isArray(value) ? value[0] : value
+  const parsed = Number(raw)
   if (!Number.isInteger(parsed) || parsed <= 0) {
     return null
   }
@@ -156,7 +164,7 @@ export function createApp() {
     res.json(buildBootstrapPayload())
   })
 
-  app.get('/api/root/overview', (_req, res) => {
+  app.get('/api/root/overview', privilegedOpsLimiter, (_req, res) => {
     const auth = getAuthenticatedSession(_req, res)
     if (!auth) {
       return
@@ -167,7 +175,7 @@ export function createApp() {
     res.json(getRootOverview())
   })
 
-  app.get('/api/settings/smtp', (req, res) => {
+  app.get('/api/settings/smtp', privilegedOpsLimiter, (req, res) => {
     const auth = getAuthenticatedSession(req, res)
     if (!auth) {
       return
@@ -178,7 +186,7 @@ export function createApp() {
     res.json(getSmtpSettings())
   })
 
-  app.put('/api/settings/smtp', (req, res) => {
+  app.put('/api/settings/smtp', privilegedOpsLimiter, (req, res) => {
     const auth = getAuthenticatedSession(req, res)
     if (!auth) {
       return
@@ -195,7 +203,7 @@ export function createApp() {
     return res.json(updateSmtpSettings(parsed.data))
   })
 
-  app.post('/api/institutions/:id/kiosk-mode', (req, res) => {
+  app.post('/api/institutions/:id/kiosk-mode', privilegedOpsLimiter, (req, res) => {
     const auth = getAuthenticatedSession(req, res)
     if (!auth) {
       return
@@ -350,11 +358,11 @@ export function createApp() {
 
   if (existsSync(webDistPath)) {
     app.use(express.static(webDistPath))
-    app.get('*', spaShellLimiter, (_req, res) => {
+    app.use(spaShellLimiter, (_req, res) => {
       res.sendFile(path.join(webDistPath, 'index.html'))
     })
   } else {
-    app.get('*', fallbackLimiter, (_req, res) => {
+    app.use(fallbackLimiter, (_req, res) => {
       res.type('html').send(`
         <html>
           <body style="font-family: sans-serif; padding: 2rem;">
