@@ -123,6 +123,7 @@ StyleCopReport.xml
 *.vspscc
 *.vssscc
 .builds
+dist/
 *.pidb
 *.svclog
 *.scc

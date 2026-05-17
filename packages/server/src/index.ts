@@ -1,4 +1,5 @@
 import express from 'express'
+import rateLimit from 'express-rate-limit'
 import path from 'node:path'
 import { existsSync } from 'node:fs'
 import { z } from 'zod'
@@ -27,6 +28,26 @@ const loginChallengeSchema = z.object({
 })
 
 const webDistPath = path.resolve(import.meta.dirname, '../../web/dist')
+const authChallengeLimiter = rateLimit({
+  windowMs: 5 * 60 * 1000,
+  limit: 5,
+  standardHeaders: true,
+  legacyHeaders: false,
+})
+
+const spaShellLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  limit: 240,
+  standardHeaders: true,
+  legacyHeaders: false,
+})
+
+const fallbackLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  limit: 120,
+  standardHeaders: true,
+  legacyHeaders: false,
+})
 
 export function createApp() {
   const app = express()
@@ -71,7 +92,7 @@ export function createApp() {
     return res.json(institution)
   })
 
-  app.post('/api/auth/challenges', (req, res) => {
+  app.post('/api/auth/challenges', authChallengeLimiter, (req, res) => {
     const parsed = loginChallengeSchema.safeParse(req.body)
     if (!parsed.success) {
       return res.status(400).json({ error: 'Invalid login challenge request.' })
@@ -82,11 +103,11 @@ export function createApp() {
 
   if (existsSync(webDistPath)) {
     app.use(express.static(webDistPath))
-    app.get('*', (_req, res) => {
+    app.get('*', spaShellLimiter, (_req, res) => {
       res.sendFile(path.join(webDistPath, 'index.html'))
     })
   } else {
-    app.get('*', (_req, res) => {
+    app.get('*', fallbackLimiter, (_req, res) => {
       res.type('html').send(`
         <html>
           <body style="font-family: sans-serif; padding: 2rem;">
