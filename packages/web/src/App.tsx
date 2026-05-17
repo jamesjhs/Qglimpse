@@ -213,13 +213,17 @@ function App() {
 
   useEffect(() => {
     if (kioskState !== 'thankyou') return
-    if (kioskCountdown <= 0) {
-      setKioskState('landing')
-      setKioskSessionToken(null)
-      setKioskDemoAnswers({})
-      return
-    }
-    const timer = setTimeout(() => setKioskCountdown((c) => c - 1), 1000)
+    if (kioskCountdown <= 0) return
+    const timer = setTimeout(() => {
+      if (kioskCountdown === 1) {
+        setKioskState('landing')
+        setKioskSessionToken(null)
+        setKioskDemoAnswers({})
+        setKioskCountdown(10)
+      } else {
+        setKioskCountdown((c) => c - 1)
+      }
+    }, 1000)
     return () => clearTimeout(timer)
   }, [kioskState, kioskCountdown])
 
