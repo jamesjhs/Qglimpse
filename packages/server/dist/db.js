@@ -13,6 +13,7 @@ function runMigrations(db) {
       slug TEXT NOT NULL UNIQUE,
       timezone TEXT NOT NULL,
       kiosk_mode_enabled INTEGER NOT NULL DEFAULT 0,
+      color_scheme TEXT NOT NULL DEFAULT 'ocean',
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
 
@@ -129,6 +130,13 @@ function runMigrations(db) {
     if (!columnNames.has('two_fa_enabled')) {
         db.exec(`ALTER TABLE users ADD COLUMN two_fa_enabled INTEGER NOT NULL DEFAULT 0;`);
     }
+    const institutionColumns = db
+        .prepare(`PRAGMA table_info(institutions)`)
+        .all();
+    const institutionColNames = new Set(institutionColumns.map((column) => column.name));
+    if (!institutionColNames.has('color_scheme')) {
+        db.exec(`ALTER TABLE institutions ADD COLUMN color_scheme TEXT NOT NULL DEFAULT 'ocean';`);
+    }
     const iqColumns = db
         .prepare(`PRAGMA table_info(institution_questions)`)
         .all();
@@ -188,8 +196,8 @@ function seedInstitution(db) {
     if (existing) {
         return existing;
     }
-    const insert = db.prepare('INSERT INTO institutions (name, slug, timezone, kiosk_mode_enabled) VALUES (?, ?, ?, ?)');
-    const result = insert.run('Downtown Clinic', 'downtown-clinic', 'America/New_York', 1);
+    const insert = db.prepare('INSERT INTO institutions (name, slug, timezone, kiosk_mode_enabled, color_scheme) VALUES (?, ?, ?, ?, ?)');
+    const result = insert.run('Downtown Clinic', 'downtown-clinic', 'America/New_York', 1, 'ocean');
     return { id: Number(result.lastInsertRowid) };
 }
 function seedUsers(db, institutionId) {
