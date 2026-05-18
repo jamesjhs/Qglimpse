@@ -28,7 +28,10 @@ export function listInstitutions() {
   const db = getDb()
   return db
     .prepare(
-      'SELECT id, name, slug, timezone, kiosk_mode_enabled AS kioskModeEnabled, created_at AS createdAt FROM institutions ORDER BY name',
+      `SELECT id, name, slug, timezone, kiosk_mode_enabled AS kioskModeEnabled,
+              color_scheme AS colorScheme, created_at AS createdAt
+       FROM institutions
+       ORDER BY name`,
     )
     .all()
 }
@@ -135,7 +138,10 @@ export function toggleInstitutionKioskMode(id: number, enabled: boolean) {
   db.prepare('UPDATE institutions SET kiosk_mode_enabled = ? WHERE id = ?').run(enabled ? 1 : 0, id)
   return db
     .prepare(
-      'SELECT id, name, slug, timezone, kiosk_mode_enabled AS kioskModeEnabled, created_at AS createdAt FROM institutions WHERE id = ?',
+      `SELECT id, name, slug, timezone, kiosk_mode_enabled AS kioskModeEnabled,
+              color_scheme AS colorScheme, created_at AS createdAt
+       FROM institutions
+       WHERE id = ?`,
     )
     .get(id)
 }
@@ -247,21 +253,32 @@ export function confirmEmailVerification(token: string) {
   db.prepare('UPDATE login_challenges SET consumed_at = CURRENT_TIMESTAMP WHERE id = ?').run(challenge.id)
 }
 
-export function createInstitution(input: { name: string; slug: string; timezone: string }) {
+export function createInstitution(input: { name: string; slug: string; timezone: string; colorScheme?: string }) {
   const db = getDb()
   const existing = db.prepare('SELECT id FROM institutions WHERE slug = ?').get(input.slug) as { id: number } | undefined
   if (existing) {
     throw new Error('An institution with this slug already exists.')
   }
   const result = db
-    .prepare('INSERT INTO institutions (name, slug, timezone, kiosk_mode_enabled) VALUES (?, ?, ?, 0)')
-    .run(input.name, input.slug, input.timezone)
+    .prepare('INSERT INTO institutions (name, slug, timezone, kiosk_mode_enabled, color_scheme) VALUES (?, ?, ?, 0, ?)')
+    .run(input.name, input.slug, input.timezone, input.colorScheme ?? 'ocean')
   const id = Number(result.lastInsertRowid)
   return db
     .prepare(
-      'SELECT id, name, slug, timezone, kiosk_mode_enabled AS kioskModeEnabled, created_at AS createdAt FROM institutions WHERE id = ?',
+      `SELECT id, name, slug, timezone, kiosk_mode_enabled AS kioskModeEnabled,
+              color_scheme AS colorScheme, created_at AS createdAt
+       FROM institutions
+       WHERE id = ?`,
     )
-    .get(id) as { id: number; name: string; slug: string; timezone: string; kioskModeEnabled: number; createdAt: string }
+    .get(id) as {
+    id: number
+    name: string
+    slug: string
+    timezone: string
+    kioskModeEnabled: number
+    colorScheme: string
+    createdAt: string
+  }
 }
 
 export function getInstitution(id: number) {
@@ -269,13 +286,24 @@ export function getInstitution(id: number) {
   return (
     db
       .prepare(
-        'SELECT id, name, slug, timezone, kiosk_mode_enabled AS kioskModeEnabled, created_at AS createdAt FROM institutions WHERE id = ?',
+        `SELECT id, name, slug, timezone, kiosk_mode_enabled AS kioskModeEnabled,
+                color_scheme AS colorScheme, created_at AS createdAt
+         FROM institutions
+         WHERE id = ?`,
       )
       .get(id) ?? null
-  ) as { id: number; name: string; slug: string; timezone: string; kioskModeEnabled: number; createdAt: string } | null
+  ) as {
+    id: number
+    name: string
+    slug: string
+    timezone: string
+    kioskModeEnabled: number
+    colorScheme: string
+    createdAt: string
+  } | null
 }
 
-export function updateInstitution(id: number, input: { name: string; slug: string; timezone: string }) {
+export function updateInstitution(id: number, input: { name: string; slug: string; timezone: string; colorScheme?: string }) {
   const db = getDb()
   const institution = db.prepare('SELECT id FROM institutions WHERE id = ?').get(id) as { id: number } | undefined
   if (!institution) {
@@ -287,17 +315,39 @@ export function updateInstitution(id: number, input: { name: string; slug: strin
   if (slugConflict) {
     throw new Error('An institution with this slug already exists.')
   }
-  db.prepare('UPDATE institutions SET name = ?, slug = ?, timezone = ? WHERE id = ?').run(
+  db.prepare('UPDATE institutions SET name = ?, slug = ?, timezone = ?, color_scheme = ? WHERE id = ?').run(
     input.name,
     input.slug,
     input.timezone,
+    input.colorScheme ?? 'ocean',
     id,
   )
   return db
     .prepare(
-      'SELECT id, name, slug, timezone, kiosk_mode_enabled AS kioskModeEnabled, created_at AS createdAt FROM institutions WHERE id = ?',
+      `SELECT id, name, slug, timezone, kiosk_mode_enabled AS kioskModeEnabled,
+              color_scheme AS colorScheme, created_at AS createdAt
+       FROM institutions
+       WHERE id = ?`,
     )
-    .get(id) as { id: number; name: string; slug: string; timezone: string; kioskModeEnabled: number; createdAt: string }
+    .get(id) as {
+    id: number
+    name: string
+    slug: string
+    timezone: string
+    kioskModeEnabled: number
+    colorScheme: string
+    createdAt: string
+  }
+}
+
+export function setInstitutionColorScheme(id: number, colorScheme: string) {
+  const db = getDb()
+  const institution = db.prepare('SELECT id FROM institutions WHERE id = ?').get(id) as { id: number } | undefined
+  if (!institution) {
+    throw new Error('Institution not found.')
+  }
+  db.prepare('UPDATE institutions SET color_scheme = ? WHERE id = ?').run(colorScheme, id)
+  return getInstitution(id)
 }
 
 export function deleteInstitution(id: number) {
@@ -597,7 +647,7 @@ export function getKioskStatus(institutionSlug: string) {
   const db = getDb()
   const row = db
     .prepare(
-      `SELECT id, name, slug, timezone, kiosk_mode_enabled AS kioskModeEnabled
+      `SELECT id, name, slug, timezone, kiosk_mode_enabled AS kioskModeEnabled, color_scheme AS colorScheme
        FROM institutions WHERE slug = ?`,
     )
     .get(institutionSlug) as {
@@ -606,6 +656,7 @@ export function getKioskStatus(institutionSlug: string) {
     slug: string
     timezone: string
     kioskModeEnabled: number
+    colorScheme: string
   } | undefined
   if (!row) {
     return null
@@ -615,6 +666,7 @@ export function getKioskStatus(institutionSlug: string) {
     institutionId: row.id,
     name: row.name,
     timezone: row.timezone,
+    colorScheme: row.colorScheme,
     questions: getActiveKioskQuestions(row.id),
   }
 }

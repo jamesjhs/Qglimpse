@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import type { FormEvent } from 'react'
+import type { CSSProperties, FormEvent } from 'react'
 import { Navigate, NavLink, Route, Routes, useSearchParams } from 'react-router-dom'
 
 type Institution = {
@@ -8,6 +8,7 @@ type Institution = {
   slug: string
   timezone: string
   kioskModeEnabled: number
+  colorScheme: 'ocean' | 'emerald' | 'sunset' | 'violet'
   createdAt: string
 }
 
@@ -138,11 +139,66 @@ type AuthUser = {
 
 const navClass = ({ isActive }: { isActive: boolean }) =>
   `whitespace-nowrap rounded-full px-3 py-2 text-sm font-medium transition ${
-    isActive ? 'bg-slate-900 text-white' : 'text-slate-600 hover:bg-slate-200 hover:text-slate-900'
+    isActive
+      ? 'bg-[var(--brand-700)] text-white shadow-lg shadow-[color:var(--brand-shadow)]'
+      : 'text-slate-600 hover:bg-[var(--brand-100)] hover:text-[var(--brand-900)]'
   }`
 
 const statCardClass =
-  'rounded-2xl border border-slate-200 bg-white p-5 shadow-sm shadow-slate-200/50 ring-1 ring-white/60'
+  'rounded-3xl border border-[var(--brand-100)] bg-white/95 p-5 shadow-sm shadow-[color:var(--brand-shadow)] ring-1 ring-white/60'
+
+const institutionColorSchemes = {
+  ocean: {
+    label: 'Ocean',
+    style: {
+      '--brand-50': '#eff6ff',
+      '--brand-100': '#dbeafe',
+      '--brand-500': '#3b82f6',
+      '--brand-600': '#2563eb',
+      '--brand-700': '#1d4ed8',
+      '--brand-900': '#1e3a8a',
+      '--brand-shadow': 'rgba(37, 99, 235, 0.18)',
+    },
+  },
+  emerald: {
+    label: 'Emerald',
+    style: {
+      '--brand-50': '#ecfdf5',
+      '--brand-100': '#d1fae5',
+      '--brand-500': '#10b981',
+      '--brand-600': '#059669',
+      '--brand-700': '#047857',
+      '--brand-900': '#064e3b',
+      '--brand-shadow': 'rgba(5, 150, 105, 0.2)',
+    },
+  },
+  sunset: {
+    label: 'Sunset',
+    style: {
+      '--brand-50': '#fff7ed',
+      '--brand-100': '#ffedd5',
+      '--brand-500': '#f97316',
+      '--brand-600': '#ea580c',
+      '--brand-700': '#c2410c',
+      '--brand-900': '#7c2d12',
+      '--brand-shadow': 'rgba(194, 65, 12, 0.2)',
+    },
+  },
+  violet: {
+    label: 'Violet',
+    style: {
+      '--brand-50': '#f5f3ff',
+      '--brand-100': '#ede9fe',
+      '--brand-500': '#8b5cf6',
+      '--brand-600': '#7c3aed',
+      '--brand-700': '#6d28d9',
+      '--brand-900': '#4c1d95',
+      '--brand-shadow': 'rgba(109, 40, 217, 0.22)',
+    },
+  },
+} as const
+
+type InstitutionColorScheme = keyof typeof institutionColorSchemes
 
 function App() {
   const [bootstrap, setBootstrap] = useState<BootstrapPayload | null>(null)
@@ -177,6 +233,7 @@ function App() {
   const [analyticsTo, setAnalyticsTo] = useState(() => new Date().toISOString().slice(0, 10))
   const [smtpTestAddress, setSmtpTestAddress] = useState('')
   const [smtpTestResult, setSmtpTestResult] = useState<string | null>(null)
+  const [savingColorSchemeFor, setSavingColorSchemeFor] = useState<number | null>(null)
   const [kioskState, setKioskState] = useState<'landing' | 'questions' | 'demographics' | 'thankyou'>('landing')
   const [kioskSessionToken, setKioskSessionToken] = useState<string | null>(null)
   const [kioskQuestions, setKioskQuestions] = useState<Question[]>([])
@@ -246,6 +303,14 @@ function App() {
       timeZone: selectedInstitution.timezone,
     }).format(new Date())
   }, [selectedInstitution])
+  const activeColorScheme = (selectedInstitution?.colorScheme ?? 'ocean') as InstitutionColorScheme
+  const appThemeStyle = useMemo(
+    () =>
+      ({
+        ...institutionColorSchemes[activeColorScheme].style,
+      }) as CSSProperties,
+    [activeColorScheme],
+  )
 
   const toggleKioskMode = async (institution: Institution) => {
     if (!authToken) {
@@ -290,6 +355,42 @@ function App() {
       )
     } catch (caughtError) {
       setError(caughtError instanceof Error ? caughtError.message : 'Unable to update kiosk mode.')
+    }
+  }
+
+  const updateInstitutionColorScheme = async (institution: Institution, colorScheme: InstitutionColorScheme) => {
+    if (!authToken) {
+      setError('Login first to manage institutional colour scheme.')
+      return
+    }
+    setError(null)
+    setSavingColorSchemeFor(institution.id)
+    try {
+      const response = await fetch(`/api/institutions/${institution.id}/color-scheme`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${authToken}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ colorScheme }),
+      })
+      if (!response.ok) {
+        const result = (await response.json()) as { error?: string }
+        throw new Error(result.error ?? 'Unable to update colour scheme.')
+      }
+      const updated = (await response.json()) as Institution
+      setBootstrap((current) => {
+        if (!current) return current
+        return {
+          ...current,
+          institutions: current.institutions.map((item) => (item.id === updated.id ? updated : item)),
+        }
+      })
+      setInstitutionList((current) => current.map((item) => (item.id === updated.id ? updated : item)))
+    } catch (caughtError) {
+      setError(caughtError instanceof Error ? caughtError.message : 'Unable to update colour scheme.')
+    } finally {
+      setSavingColorSchemeFor(null)
     }
   }
 
@@ -858,6 +959,7 @@ function App() {
     <Routes>
       <Route path="/kiosk" element={sessionUser ? <KioskFullScreen
         institution={selectedInstitution}
+        colorScheme={activeColorScheme}
         kioskState={kioskState}
         kioskLoading={kioskLoading}
         kioskQuestions={kioskQuestions}
@@ -882,17 +984,17 @@ function App() {
         onDemoNext={() => void advanceKioskDemographic(false)}
       /> : <Navigate to="/auth-core" replace />} />
       <Route path="*" element={
-    <div className="min-h-screen bg-slate-50 text-slate-900">
-      <header className="border-b border-slate-200 bg-white/90 backdrop-blur">
+    <div className="min-h-screen bg-gradient-to-b from-[var(--brand-50)] via-white to-slate-50 text-slate-900" style={appThemeStyle}>
+      <header className="border-b border-[var(--brand-100)] bg-white/90 backdrop-blur">
         <div className="mx-auto flex max-w-6xl flex-col gap-4 px-6 py-6 lg:flex-row lg:items-end lg:justify-between">
           <div>
-            <p className="text-sm font-semibold uppercase tracking-[0.2em] text-sky-700">Visitor feedback platform</p>
+            <p className="text-sm font-semibold uppercase tracking-[0.2em] text-[var(--brand-700)]">Visitor feedback platform</p>
             <h1 className="mt-2 text-3xl font-semibold tracking-tight md:text-4xl">{bootstrap.app.name}</h1>
             <p className="mt-3 max-w-3xl text-slate-600">
               Quick Glimpse helps organizations capture in-person feedback quickly with kiosk surveys, secure sign-in, and easy analytics.
             </p>
           </div>
-          <div className="rounded-2xl border border-slate-200 bg-slate-950 px-4 py-3 text-sm text-slate-100 shadow-lg shadow-slate-900/10">
+          <div className="rounded-2xl border border-[var(--brand-600)] bg-[var(--brand-900)] px-4 py-3 text-sm text-white shadow-lg shadow-[color:var(--brand-shadow)]">
             <div>Version {bootstrap.app.version}</div>
             <div>Always-on feedback insights</div>
           </div>
@@ -932,29 +1034,51 @@ function App() {
             element={
               !sessionUser ? (
                 <div className="grid gap-6">
-                  <section className={statCardClass}>
-                    <h2 className="text-2xl font-semibold">Understand every visitor interaction in minutes</h2>
-                    <p className="mt-3 max-w-3xl text-slate-700">
-                      Quick Glimpse is a simple feedback platform for reception desks, clinics, campuses, and service counters.
-                      Launch a kiosk, collect responses, and turn them into clear day-by-day insights.
+                  <section className="relative overflow-hidden rounded-3xl border border-[var(--brand-100)] bg-gradient-to-br from-[var(--brand-900)] via-[var(--brand-700)] to-[var(--brand-600)] p-8 text-white shadow-2xl shadow-[color:var(--brand-shadow)]">
+                    <p className="text-xs font-semibold uppercase tracking-[0.25em] text-white/80">Built for busy institutions</p>
+                    <h2 className="mt-3 max-w-3xl text-3xl font-semibold leading-tight md:text-4xl">
+                      Turn every in-person interaction into actionable service insight
+                    </h2>
+                    <p className="mt-4 max-w-2xl text-sm text-slate-100 md:text-base">
+                      As your growth partner, I’d position Quick Glimpse as the fastest path from frontline feedback to confident decisions across reception, outpatient, student services, retail counters, and community venues.
                     </p>
-                    <div className="mt-5 flex flex-wrap gap-3">
-                      <NavLink className="rounded-full bg-slate-900 px-5 py-2.5 text-sm font-semibold text-white" to="/auth-core">Sign in</NavLink>
-                      <NavLink className="rounded-full bg-slate-200 px-5 py-2.5 text-sm font-semibold text-slate-900" to="/kiosk">View kiosk experience</NavLink>
+                    <div className="mt-6 flex flex-wrap gap-3">
+                      <NavLink className="rounded-full bg-white px-5 py-2.5 text-sm font-semibold text-[var(--brand-900)]" to="/auth-core">Register / sign in</NavLink>
+                      <NavLink className="rounded-full bg-white/15 px-5 py-2.5 text-sm font-semibold text-white ring-1 ring-white/40" to="/kiosk">See kiosk flow</NavLink>
                     </div>
+                  </section>
+                  <section className="grid gap-4 lg:grid-cols-[1.2fr_0.8fr]">
+                    <article className={statCardClass}>
+                      <h3 className="text-lg font-semibold">Product in action: visitor kiosk journey</h3>
+                      <div className="mt-4 grid gap-3 text-sm">
+                        <div className="rounded-2xl border border-[var(--brand-100)] bg-[var(--brand-50)] px-4 py-3"><strong>Step 1:</strong> Welcome screen invites instant participation with one tap.</div>
+                        <div className="rounded-2xl border border-[var(--brand-100)] bg-white px-4 py-3"><strong>Step 2:</strong> Visitors answer guided prompts (rating, yes/no, multiple choice, text).</div>
+                        <div className="rounded-2xl border border-[var(--brand-100)] bg-white px-4 py-3"><strong>Step 3:</strong> Optional demographics add context without requiring personal identifiers.</div>
+                        <div className="rounded-2xl border border-[var(--brand-100)] bg-white px-4 py-3"><strong>Step 4:</strong> Dashboard trendlines and cross-tabs reveal where service improvements matter most.</div>
+                      </div>
+                    </article>
+                    <article className={statCardClass}>
+                      <h3 className="text-lg font-semibold">Institutional command centre</h3>
+                      <ul className="mt-4 space-y-3 text-sm text-slate-700">
+                        <li className="rounded-xl bg-slate-50 px-3 py-2">✅ Institution admins control kiosk mode and question rotation.</li>
+                        <li className="rounded-xl bg-slate-50 px-3 py-2">✅ Root users monitor aggregate platform health and rollout readiness.</li>
+                        <li className="rounded-xl bg-slate-50 px-3 py-2">✅ Secure sign-in with password + OTP/magic-link verification choices.</li>
+                        <li className="rounded-xl bg-slate-50 px-3 py-2">✅ Built-in SMTP configuration for enterprise email delivery workflows.</li>
+                      </ul>
+                    </article>
                   </section>
                   <section className="grid gap-4 md:grid-cols-3">
                     <article className={statCardClass}>
-                      <h3 className="text-lg font-semibold">Fast kiosk surveys</h3>
-                      <p className="mt-2 text-sm text-slate-700">Collect quick answers from visitors with one-question-at-a-time flows designed for shared devices.</p>
+                      <h3 className="text-lg font-semibold">Public-facing confidence</h3>
+                      <p className="mt-2 text-sm text-slate-700">Modern landing, privacy-first messaging, and frictionless onboarding for new institutions.</p>
                     </article>
                     <article className={statCardClass}>
-                      <h3 className="text-lg font-semibold">Flexible question formats</h3>
-                      <p className="mt-2 text-sm text-slate-700">Use ratings, yes/no prompts, multiple choice, text responses, and more to fit your service model.</p>
+                      <h3 className="text-lg font-semibold">Admin-ready operations</h3>
+                      <p className="mt-2 text-sm text-slate-700">User lifecycle controls, institution management, and configurable colour schemes by institution.</p>
                     </article>
                     <article className={statCardClass}>
-                      <h3 className="text-lg font-semibold">Clear reporting</h3>
-                      <p className="mt-2 text-sm text-slate-700">Review trends and response patterns with privacy-safe analytics that support better operational decisions.</p>
+                      <h3 className="text-lg font-semibold">Decision-grade analytics</h3>
+                      <p className="mt-2 text-sm text-slate-700">Daily response views plus demographic breakdowns and cross-tab insights with privacy safeguards.</p>
                     </article>
                   </section>
                 </div>
@@ -1158,19 +1282,37 @@ function App() {
                     <article className={statCardClass} key={institution.id}>
                       <div className="flex flex-wrap items-start justify-between gap-4">
                         <div>
-                          <p className="text-xs font-semibold uppercase tracking-[0.2em] text-sky-700">Institution</p>
+                          <p className="text-xs font-semibold uppercase tracking-[0.2em] text-[var(--brand-700)]">Institution</p>
                           <h2 className="mt-2 text-xl font-semibold">{institution.name}</h2>
                           <p className="mt-2 text-sm text-slate-600">Slug: {institution.slug}</p>
                           <p className="mt-1 text-sm text-slate-600">Timezone: {institution.timezone}</p>
+                          <p className="mt-1 text-sm text-slate-600">Theme: {institutionColorSchemes[institution.colorScheme]?.label ?? institution.colorScheme}</p>
                         </div>
                         <button
-                          className={`rounded-full px-4 py-2 text-sm font-semibold ${institution.kioskModeEnabled ? 'bg-emerald-600 text-white' : 'bg-slate-200 text-slate-900'}`}
+                          className={`rounded-full px-4 py-2 text-sm font-semibold ${institution.kioskModeEnabled ? 'bg-[var(--brand-600)] text-white' : 'bg-slate-200 text-slate-900'}`}
                           onClick={() => void toggleKioskMode(institution)}
                           type="button"
                         >
                           {institution.kioskModeEnabled ? 'Kiosk on' : 'Kiosk off'}
                         </button>
                       </div>
+                      {sessionUser?.role === 'root' || (sessionUser?.role === 'institution_admin' && sessionUser.institutionId === institution.id) ? (
+                        <div className="mt-4 flex flex-wrap items-center gap-3">
+                          <label className="text-sm font-medium text-slate-700">Institution colour scheme</label>
+                          <select
+                            className="rounded-xl border border-slate-300 px-3 py-2 text-sm"
+                            disabled={savingColorSchemeFor === institution.id}
+                            value={institution.colorScheme}
+                            onChange={(event) => void updateInstitutionColorScheme(institution, event.target.value as InstitutionColorScheme)}
+                          >
+                            {Object.entries(institutionColorSchemes).map(([value, scheme]) => (
+                              <option key={value} value={value}>
+                                {scheme.label}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                      ) : null}
                     </article>
                   ))}
                 </div>
@@ -1211,7 +1353,7 @@ function App() {
                   </div>
                   <a
                     href="/kiosk"
-                    className="mt-4 inline-block rounded-full bg-sky-700 px-5 py-2.5 text-sm font-semibold text-white shadow-lg shadow-sky-700/20"
+                    className="mt-4 inline-block rounded-full bg-[var(--brand-700)] px-5 py-2.5 text-sm font-semibold text-white shadow-lg shadow-[color:var(--brand-shadow)]"
                   >
                     Open full-screen kiosk
                   </a>
@@ -1295,7 +1437,7 @@ function App() {
                   <h2 className="text-xl font-semibold">Institution questions</h2>
                   {selectedInstitution && authToken ? (
                     <button
-                      className="rounded-full bg-sky-700 px-4 py-2 text-sm font-semibold text-white"
+                      className="rounded-full bg-[var(--brand-700)] px-4 py-2 text-sm font-semibold text-white"
                       onClick={() => void loadInstitutionQuestions(selectedInstitution.id, authToken)}
                       type="button"
                     >
@@ -1861,6 +2003,7 @@ export default App
 
 type KioskFullScreenProps = {
   institution: Institution | null
+  colorScheme: InstitutionColorScheme
   kioskState: 'landing' | 'questions' | 'demographics' | 'thankyou'
   kioskLoading: boolean
   kioskQuestions: Question[]
@@ -1888,6 +2031,7 @@ type KioskFullScreenProps = {
 function KioskFullScreen(props: KioskFullScreenProps) {
   const {
     institution, kioskState, kioskLoading, kioskQuestions, kioskCurrentIdx,
+    colorScheme,
     kioskCurrentAnswer, kioskStarValue, kioskSliderValue, kioskMultiAnswers,
     kioskDemoIdx, kioskDemoAnswers, kioskCountdown, error,
     onStart, onAnswer, onStarChange, onSliderChange, onMultiToggle,
@@ -1900,16 +2044,16 @@ function KioskFullScreen(props: KioskFullScreenProps) {
   const currentDemoQ = demoQuestions[kioskDemoIdx] ?? null
 
   return (
-    <div className="flex min-h-screen flex-col items-center justify-center bg-slate-900 px-6 text-white">
+    <div className="flex min-h-screen flex-col items-center justify-center bg-[var(--brand-900)] px-6 text-white" style={institutionColorSchemes[colorScheme].style as CSSProperties}>
       {kioskLoading ? (
         <div className="flex flex-col items-center gap-4">
-          <div className="h-12 w-12 animate-spin rounded-full border-4 border-sky-500 border-t-transparent" />
+              <div className="h-12 w-12 animate-spin rounded-full border-4 border-[var(--brand-500)] border-t-transparent" />
           <p className="text-slate-300">Please wait…</p>
         </div>
       ) : kioskState === 'landing' ? (
         <div className="flex flex-col items-center gap-8 text-center">
           <div>
-            <p className="text-sm font-semibold uppercase tracking-[0.2em] text-sky-400">Patient feedback</p>
+              <p className="text-sm font-semibold uppercase tracking-[0.2em] text-[var(--brand-100)]">Patient feedback</p>
             <h1 className="mt-3 text-4xl font-semibold tracking-tight md:text-5xl">{institution?.name ?? 'Quick Glimpse'}</h1>
             <p className="mt-4 max-w-md text-lg text-slate-300">Share your experience with us. Your feedback helps us improve our service.</p>
           </div>
@@ -1917,7 +2061,7 @@ function KioskFullScreen(props: KioskFullScreenProps) {
             <p className="rounded-xl border border-amber-500 bg-amber-900/40 px-4 py-3 text-amber-200">{error}</p>
           ) : null}
           <button
-            className="rounded-full bg-sky-600 px-10 py-4 text-xl font-semibold shadow-2xl shadow-sky-500/30 transition hover:bg-sky-500"
+            className="rounded-full bg-[var(--brand-600)] px-10 py-4 text-xl font-semibold shadow-2xl shadow-[color:var(--brand-shadow)] transition hover:bg-[var(--brand-500)]"
             onClick={onStart}
             type="button"
           >
@@ -1938,7 +2082,7 @@ function KioskFullScreen(props: KioskFullScreenProps) {
                   {[1, 2, 3, 4, 5].map((star) => (
                     <button
                       key={star}
-                      className={`text-4xl transition ${kioskStarValue >= star ? 'text-amber-400' : 'text-slate-600'}`}
+                    className={`text-4xl transition ${kioskStarValue >= star ? 'text-amber-400' : 'text-slate-600'}`}
                       onClick={() => onStarChange(star)}
                       type="button"
                     >
@@ -1949,7 +2093,7 @@ function KioskFullScreen(props: KioskFullScreenProps) {
               ) : currentQuestion.questionType === 'scale' ? (
                 <div>
                   <input
-                    className="w-full accent-sky-500"
+                    className="w-full accent-[var(--brand-500)]"
                     max="10"
                     min="0"
                     type="range"
@@ -1967,7 +2111,7 @@ function KioskFullScreen(props: KioskFullScreenProps) {
                   {['yes', 'no'].map((opt) => (
                     <button
                       key={opt}
-                      className={`flex-1 rounded-2xl py-4 text-lg font-semibold transition ${kioskCurrentAnswer === opt ? 'bg-sky-600 text-white' : 'bg-slate-700 text-slate-200 hover:bg-slate-600'}`}
+                      className={`flex-1 rounded-2xl py-4 text-lg font-semibold transition ${kioskCurrentAnswer === opt ? 'bg-[var(--brand-600)] text-white' : 'bg-slate-700 text-slate-200 hover:bg-slate-600'}`}
                       onClick={() => onAnswer(opt)}
                       type="button"
                     >
@@ -1980,7 +2124,7 @@ function KioskFullScreen(props: KioskFullScreenProps) {
                   {currentQuestion.options.map((opt) => (
                     <button
                       key={opt}
-                      className={`rounded-full px-5 py-2.5 font-medium transition ${kioskMultiAnswers.includes(opt) ? 'bg-sky-600 text-white' : 'bg-slate-700 text-slate-200 hover:bg-slate-600'}`}
+                      className={`rounded-full px-5 py-2.5 font-medium transition ${kioskMultiAnswers.includes(opt) ? 'bg-[var(--brand-600)] text-white' : 'bg-slate-700 text-slate-200 hover:bg-slate-600'}`}
                       onClick={() => onMultiToggle(opt)}
                       type="button"
                     >
@@ -1993,7 +2137,7 @@ function KioskFullScreen(props: KioskFullScreenProps) {
                   {currentQuestion.options.map((opt) => (
                     <button
                       key={opt}
-                      className={`rounded-2xl px-5 py-3 text-left font-medium transition ${kioskCurrentAnswer === opt ? 'bg-sky-600 text-white' : 'bg-slate-700 text-slate-200 hover:bg-slate-600'}`}
+                      className={`rounded-2xl px-5 py-3 text-left font-medium transition ${kioskCurrentAnswer === opt ? 'bg-[var(--brand-600)] text-white' : 'bg-slate-700 text-slate-200 hover:bg-slate-600'}`}
                       onClick={() => onAnswer(opt)}
                       type="button"
                     >
@@ -2003,7 +2147,7 @@ function KioskFullScreen(props: KioskFullScreenProps) {
                 </div>
               ) : (
                 <textarea
-                  className="w-full rounded-2xl bg-slate-700 px-4 py-3 text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-sky-500"
+                  className="w-full rounded-2xl bg-slate-700 px-4 py-3 text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-[var(--brand-500)]"
                   placeholder="Type your answer here…"
                   rows={4}
                   value={kioskCurrentAnswer}
@@ -2013,7 +2157,7 @@ function KioskFullScreen(props: KioskFullScreenProps) {
             </div>
             <div className="mt-6 flex justify-end">
               <button
-                className="rounded-full bg-sky-600 px-8 py-3 font-semibold transition hover:bg-sky-500"
+                className="rounded-full bg-[var(--brand-600)] px-8 py-3 font-semibold transition hover:bg-[var(--brand-500)]"
                 onClick={onSubmitAnswer}
                 type="button"
               >
@@ -2035,7 +2179,7 @@ function KioskFullScreen(props: KioskFullScreenProps) {
                   {currentDemoQ.options.map((opt) => (
                     <button
                       key={opt}
-                      className={`rounded-2xl px-5 py-3 text-left font-medium transition ${kioskDemoAnswers[currentDemoQ.templateKey ?? `iq-${currentDemoQ.id}`] === opt ? 'bg-sky-600 text-white' : 'bg-slate-700 text-slate-200 hover:bg-slate-600'}`}
+                       className={`rounded-2xl px-5 py-3 text-left font-medium transition ${kioskDemoAnswers[currentDemoQ.templateKey ?? `iq-${currentDemoQ.id}`] === opt ? 'bg-[var(--brand-600)] text-white' : 'bg-slate-700 text-slate-200 hover:bg-slate-600'}`}
                       onClick={() => onDemoAnswer(currentDemoQ.templateKey ?? `iq-${currentDemoQ.id}`, opt)}
                       type="button"
                     >
@@ -2045,7 +2189,7 @@ function KioskFullScreen(props: KioskFullScreenProps) {
                 </div>
               ) : (
                 <input
-                  className="w-full rounded-2xl bg-slate-700 px-4 py-3 text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-sky-500"
+                  className="w-full rounded-2xl bg-slate-700 px-4 py-3 text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-[var(--brand-500)]"
                   placeholder="Your answer"
                   value={kioskDemoAnswers[currentDemoQ.templateKey ?? `iq-${currentDemoQ.id}`] ?? ''}
                   onChange={(event) => onDemoAnswer(currentDemoQ.templateKey ?? `iq-${currentDemoQ.id}`, event.target.value)}
@@ -2061,7 +2205,7 @@ function KioskFullScreen(props: KioskFullScreenProps) {
                 Skip
               </button>
               <button
-                className="rounded-full bg-sky-600 px-8 py-3 font-semibold transition hover:bg-sky-500"
+                className="rounded-full bg-[var(--brand-600)] px-8 py-3 font-semibold transition hover:bg-[var(--brand-500)]"
                 onClick={onDemoNext}
                 type="button"
               >
