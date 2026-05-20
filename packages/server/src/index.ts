@@ -1068,6 +1068,6 @@ const isDirectRun =
 if (isDirectRun) {
   const app = createApp()
   app.listen(config.port, () => {
-    console.log(`Quick Glimpse listening on http://localhost:${config.port}`)
+    console.log(`Quick Glimpse listening on ${config.baseUrl}`)
   })
 }

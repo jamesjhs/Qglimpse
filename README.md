@@ -2,6 +2,8 @@
 
 Quick Glimpse is a Docker-contained PWA for institution-specific visitor insight collection. Steps 1–10 are complete, covering the full feature set from auth core through kiosk runtime, analytics, and SMTP integration.
 
+Server/setup variables are loaded from the root `.env` file.
+
 ## Features
 
 - **Multi-institution support** — create, manage, and isolate multiple institutions under a single root account

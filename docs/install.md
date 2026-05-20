@@ -10,23 +10,30 @@
 
 ## Environment variables
 
-All variables are optional; defaults are shown in the **Default** column.
+The project now loads setup/runtime variables from the root `.env` file.
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `PORT` | `3000` | TCP port the server listens on |
-| `QUICKGLIMPSE_BASE_URL` | `http://localhost:3000` | Canonical public URL — used in magic-link emails and redirects |
-| `QUICKGLIMPSE_DATA_DIR` | `<repo-root>/.data` | Directory where SQLite data files are stored |
-| `QUICKGLIMPSE_DB_PATH` | `$QUICKGLIMPSE_DATA_DIR/quickglimpse.db` | Full path to the SQLite database file |
-| `QUICKGLIMPSE_SESSION_TTL_MS` | `86400000` (24 h) | Session token lifetime in milliseconds |
-| `QUICKGLIMPSE_ROOT_SEED_PASSWORD` | `ChangeMeRoot123!` | Seed password for the root account on first run |
-| `QUICKGLIMPSE_INSTITUTION_SEED_PASSWORD` | `ChangeMeInstitution123!` | Seed password for the seeded institution-admin account |
-| `TURNSTILE_SITE_KEY` | _(empty)_ | Cloudflare Turnstile site key — set in production |
-| `TURNSTILE_SECRET_KEY` | _(empty)_ | Cloudflare Turnstile secret key — when absent, dev-bypass mode is active |
-| `TURNSTILE_DEV_BYPASS_TOKEN` | `dev-turnstile-pass` | Token accepted in place of a real Turnstile token when `TURNSTILE_SECRET_KEY` is unset |
-| `APP_VERSION` | `0.2.0` | Reported by `/readyz` |
-
-> **SMTP settings** are stored in the database (not env vars) and are configured at runtime via the root admin UI or `PUT /api/settings/smtp`. See the [technical reference](technical.md) for the full field set.
+| Variable | Description |
+|----------|-------------|
+| `PORT` | TCP port the server listens on |
+| `QUICKGLIMPSE_BASE_URL` | Canonical public URL — used in magic-link emails and redirects |
+| `QUICKGLIMPSE_DATA_DIR` | Directory where SQLite data files are stored |
+| `QUICKGLIMPSE_DB_PATH` | Full path to the SQLite database file |
+| `QUICKGLIMPSE_DB_ENCRYPTION_KEY` | Database encryption key value for deployment environments |
+| `QUICKGLIMPSE_SESSION_TTL_MS` | Session token lifetime in milliseconds |
+| `QUICKGLIMPSE_ROOT_SEED_PASSWORD` | Seed password for the root account on first run |
+| `QUICKGLIMPSE_INSTITUTION_SEED_PASSWORD` | Seed password for the seeded institution-admin account |
+| `TURNSTILE_SITE_KEY` | Cloudflare Turnstile site key |
+| `TURNSTILE_SECRET_KEY` | Cloudflare Turnstile secret key |
+| `TURNSTILE_DEV_BYPASS_TOKEN` | Token accepted in place of a real Turnstile token when `TURNSTILE_SECRET_KEY` is unset |
+| `TURNSTILE_CF_ACCESS_CLIENT_ID` | Optional CF Access client ID header for Turnstile verification calls |
+| `TURNSTILE_CF_ACCESS_CLIENT_SECRET` | Optional CF Access client secret header for Turnstile verification calls |
+| `SMTP_USERNAME` | Initial SMTP username |
+| `SMTP_PASSWORD` | Initial SMTP password |
+| `SMTP_SEND_ADDRESS` | Initial SMTP send address |
+| `SMTP_SERVER_ADDRESS` | Initial SMTP server host |
+| `SMTP_PORT` | Initial SMTP server port |
+| `SMTP_SECURE_LOGIN_TYPE` | Initial SMTP secure mode (`none`, `ssl`, `starttls`) |
+| `APP_VERSION` | Version reported by `/readyz` |
 
 ### Dev-bypass mode
 
