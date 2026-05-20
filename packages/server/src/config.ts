@@ -1,10 +1,14 @@
 import { existsSync, mkdirSync } from 'node:fs'
 import path from 'node:path'
+import { APP_VERSION } from './version.js'
 
 const repoRoot = path.resolve(import.meta.dirname, '../../..')
 const envPath = path.join(repoRoot, '.env')
+const envExamplePath = path.join(repoRoot, '.env.example')
 if (existsSync(envPath)) {
   process.loadEnvFile(envPath)
+} else if (existsSync(envExamplePath)) {
+  process.loadEnvFile(envExamplePath)
 }
 
 function requireEnv(name: string) {
@@ -39,7 +43,7 @@ mkdirSync(dataDir, { recursive: true })
 
 export const config = {
   appName: 'Quick Glimpse',
-  version: requireEnv('APP_VERSION'),
+  version: APP_VERSION,
   port: requireIntegerEnv('PORT'),
   baseUrl: requireEnv('QUICKGLIMPSE_BASE_URL'),
   dataDir,
@@ -57,9 +61,9 @@ export const config = {
   turnstile: {
     siteKey: process.env.TURNSTILE_SITE_KEY ?? '',
     secretKey: process.env.TURNSTILE_SECRET_KEY ?? '',
-    devBypassToken: requireEnv('TURNSTILE_DEV_BYPASS_TOKEN'),
-    cfAccessClientId: process.env.TURNSTILE_CF_ACCESS_CLIENT_ID ?? '',
-    cfAccessClientSecret: process.env.TURNSTILE_CF_ACCESS_CLIENT_SECRET ?? '',
+    devBypassToken: 'dev-turnstile-pass',
+    cfAccessClientId: requireEnv('CF-Access-Client-Id'),
+    cfAccessClientSecret: requireEnv('CF-Access-Client-Secret'),
   },
   seedCredentials: {
     rootPassword: requireEnv('QUICKGLIMPSE_ROOT_SEED_PASSWORD'),

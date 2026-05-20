@@ -7,8 +7,8 @@ import path from 'node:path'
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'quickglimpse-auth-test-'))
 process.env.QUICKGLIMPSE_DB_PATH = path.join(tempDir, 'quickglimpse-auth.db')
 process.env.QUICKGLIMPSE_DATA_DIR = tempDir
-process.env.TURNSTILE_SECRET_KEY = ''
-process.env.TURNSTILE_DEV_BYPASS_TOKEN = 'dev-turnstile-pass'
+process.env['CF-Access-Client-Id'] = 'test-client-id'
+process.env['CF-Access-Client-Secret'] = 'test-client-secret'
 
 const auth = await import('../dist/auth.js')
 auth.ensureSeedCredentials()

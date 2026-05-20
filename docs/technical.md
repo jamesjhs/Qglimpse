@@ -257,7 +257,7 @@ All API routes are prefixed `/api/`. Authenticated routes require an `Authorizat
 
 ## Rate limiting
 
-Rate limiters are **disabled in dev-bypass mode** (when `TURNSTILE_SECRET_KEY` is unset).
+Rate limiters are **disabled in dev-bypass mode**.
 
 | Limiter | Window | Limit | Applied to |
 |---------|--------|-------|-----------|
