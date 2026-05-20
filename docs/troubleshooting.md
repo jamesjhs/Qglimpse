@@ -82,14 +82,14 @@ npm start
 **Cause:** The SMTP server address or port is wrong, or the server is not reachable from the host running Quick Glimpse.
 
 **Fix:**
-1. Verify `serverAddress` and `port` in the root admin SMTP settings.
+1. Verify `serverAddress` and `port` in the platform admin SMTP settings.
 2. Confirm network connectivity: `telnet <serverAddress> <port>`.
 
 ### Test email fails: `Invalid login` / `Authentication failed`
 
 **Cause:** Wrong `username` or `password` in SMTP settings.
 
-**Fix:** Update credentials via the root admin UI (`Settings → SMTP`) or `PUT /api/settings/smtp`.
+**Fix:** Update credentials via the platform admin UI (`Settings → SMTP`) or `PUT /api/settings/smtp`.
 
 ### Test email fails: `self-signed certificate` / TLS error
 
@@ -114,7 +114,7 @@ npm start
 
 **Cause:** Kiosk mode is disabled for the institution.
 
-**Fix:** Sign in as root or institution admin and enable kiosk mode:
+**Fix:** Sign in as an authorized admin and enable kiosk mode:
 - UI: **Admin → Institution → Kiosk mode → Enable**
 - API: `POST /api/institutions/:id/kiosk-mode` with body `{ "enabled": true }`
 

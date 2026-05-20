@@ -8,19 +8,18 @@ Use this scaffold as a starting point, then complete the following before releas
 4. Store SMTP credentials in a secret manager or injected environment variables, not in source control.
 5. Back up the SQLite data directory and monitor `/readyz` from your orchestration platform.
 6. Run the server under PM2 with `/home/runner/work/quickglimpse/quickglimpse/ecosystem.config.cjs` or an equivalent process manager.
-7. Review route-level authorization before exposing institution or root workflows.
+7. Review route-level authorization before exposing institution or privileged administrative workflows.
 8. Add audit logging, rate limiting, and abuse protection around authentication endpoints.
 9. Tune CSP, HSTS, cookie, and cache headers at the reverse proxy layer.
-10. Revisit root analytics exposure whenever reporting requirements change.
+10. Revisit privileged aggregate-analytics exposure whenever reporting requirements change.
 
 ## Security validation and penetration-test checklist
 
 - Verify unauthenticated requests are denied for all sensitive routes:
-  - `/api/root/overview`
   - `/api/settings/smtp` (GET/PUT)
   - `/api/institutions/:id/kiosk-mode`
 - Verify role boundaries:
-  - institution admins cannot access root-only routes
+  - institution admins cannot access privileged admin-only routes
   - institution admins can only mutate kiosk state for their own institution
 - Replay/abuse checks:
   - exercise auth and challenge rate limits (`429` paths)

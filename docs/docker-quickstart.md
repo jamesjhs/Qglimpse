@@ -14,12 +14,12 @@
 
 ## Post-start verification workflow
 
-1. Sign in as root with the seeded root credentials.
-2. Confirm **Root** view loads aggregate metrics only.
-3. Confirm **SMTP** settings can be read/updated as root.
+1. Sign in as a platform administrator with seeded administrative credentials.
+2. Confirm the aggregate-only platform overview view loads expected metrics.
+3. Confirm **SMTP** settings can be read/updated by an authorized administrator.
 4. Sign in as institution admin and confirm:
    - kiosk mode can be toggled for own institution
-   - root and SMTP routes remain inaccessible.
+   - privileged overview and SMTP routes remain inaccessible.
 
 ## Environment variables
 

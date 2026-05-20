@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
-import { APP_VERSION } from './version.js';
+const APP_VERSION = '0.2.0';
 const repoRoot = path.resolve(import.meta.dirname, '../../..');
 const envPath = path.join(repoRoot, '.env');
 const envExamplePath = path.join(repoRoot, '.env.example');
