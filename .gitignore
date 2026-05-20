@@ -436,3 +436,4 @@ FodyWeavers.xsd
 *.msm
 *.msp
 /.data
+/packages
