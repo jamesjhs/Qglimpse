@@ -1,13 +1,14 @@
 services:
   quickglimpse:
     build: .
+    env_file:
+      - ./.env
     ports:
-      - "3000:3000"
+      - "${PORT}:${PORT}"
     environment:
-      PORT: 3000
-      QUICKGLIMPSE_BASE_URL: http://localhost:3000
-      QUICKGLIMPSE_DATA_DIR: /var/lib/quickglimpse
+      QUICKGLIMPSE_DATA_DIR: ${QUICKGLIMPSE_DATA_DIR}
+      QUICKGLIMPSE_DB_PATH: ${QUICKGLIMPSE_DB_PATH}
     volumes:
-      - quickglimpse-data:/var/lib/quickglimpse
+      - quickglimpse-data:${QUICKGLIMPSE_DATA_DIR}
 volumes:
   quickglimpse-data:

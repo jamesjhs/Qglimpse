@@ -77,12 +77,12 @@ function runMigrations(db: Database.Database) {
 
     CREATE TABLE IF NOT EXISTS smtp_settings (
       id INTEGER PRIMARY KEY CHECK (id = 1),
-      username TEXT NOT NULL DEFAULT '',
-      password TEXT NOT NULL DEFAULT '',
-      send_address TEXT NOT NULL DEFAULT '',
-      server_address TEXT NOT NULL DEFAULT '',
-      port INTEGER NOT NULL DEFAULT 587,
-      secure_login_type TEXT NOT NULL DEFAULT 'starttls',
+      username TEXT NOT NULL,
+      password TEXT NOT NULL,
+      send_address TEXT NOT NULL,
+      server_address TEXT NOT NULL,
+      port INTEGER NOT NULL,
+      secure_login_type TEXT NOT NULL,
       updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
 
@@ -275,8 +275,15 @@ function seedQuestionTemplates(db: Database.Database, institutionId: number) {
 function seedSmtpSettings(db: Database.Database) {
   db.prepare(
     `INSERT OR IGNORE INTO smtp_settings (id, username, password, send_address, server_address, port, secure_login_type)
-     VALUES (1, '', '', '', '', 587, 'starttls')`,
-  ).run()
+     VALUES (1, ?, ?, ?, ?, ?, ?)`,
+  ).run(
+    config.smtpSeed.username,
+    config.smtpSeed.password,
+    config.smtpSeed.sendAddress,
+    config.smtpSeed.serverAddress,
+    config.smtpSeed.port,
+    config.smtpSeed.secureLoginType,
+  )
 }
 
 export function getDb() {
