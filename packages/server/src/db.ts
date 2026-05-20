@@ -19,6 +19,7 @@ function runMigrations(db: Database.Database) {
       slug TEXT NOT NULL UNIQUE,
       timezone TEXT NOT NULL,
       kiosk_mode_enabled INTEGER NOT NULL DEFAULT 0,
+      color_scheme TEXT NOT NULL DEFAULT 'ocean',
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
 
@@ -137,6 +138,14 @@ function runMigrations(db: Database.Database) {
     db.exec(`ALTER TABLE users ADD COLUMN two_fa_enabled INTEGER NOT NULL DEFAULT 0;`)
   }
 
+  const institutionColumns = db
+    .prepare(`PRAGMA table_info(institutions)`)
+    .all() as Array<{ name: string }>
+  const institutionColNames = new Set(institutionColumns.map((column) => column.name))
+  if (!institutionColNames.has('color_scheme')) {
+    db.exec(`ALTER TABLE institutions ADD COLUMN color_scheme TEXT NOT NULL DEFAULT 'ocean';`)
+  }
+
   const iqColumns = db
     .prepare(`PRAGMA table_info(institution_questions)`)
     .all() as Array<{ name: string }>
@@ -202,9 +211,9 @@ function seedInstitution(db: Database.Database): SeedInstitution {
   }
 
   const insert = db.prepare(
-    'INSERT INTO institutions (name, slug, timezone, kiosk_mode_enabled) VALUES (?, ?, ?, ?)',
+    'INSERT INTO institutions (name, slug, timezone, kiosk_mode_enabled, color_scheme) VALUES (?, ?, ?, ?, ?)',
   )
-  const result = insert.run('Downtown Clinic', 'downtown-clinic', 'America/New_York', 1)
+  const result = insert.run('Downtown Clinic', 'downtown-clinic', 'America/New_York', 1, 'ocean')
 
   return { id: Number(result.lastInsertRowid) }
 }

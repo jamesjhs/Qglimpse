@@ -231,6 +231,8 @@ PublishScripts/
 **/[Pp]ackages/*
 # except build/, which is used as an MSBuild target.
 !**/[Pp]ackages/build/
+
+/packages
 !packages/
 !packages/server/
 !packages/server/**
@@ -434,7 +436,3 @@ FodyWeavers.xsd
 *.msm
 *.msp
 /.data
-/packages
-/packages/web
-/packages/server/dist
-/packages

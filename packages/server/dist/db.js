@@ -13,6 +13,7 @@ function runMigrations(db) {
       slug TEXT NOT NULL UNIQUE,
       timezone TEXT NOT NULL,
       kiosk_mode_enabled INTEGER NOT NULL DEFAULT 0,
+      color_scheme TEXT NOT NULL DEFAULT 'ocean',
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
 
@@ -129,6 +130,13 @@ function runMigrations(db) {
     if (!columnNames.has('two_fa_enabled')) {
         db.exec(`ALTER TABLE users ADD COLUMN two_fa_enabled INTEGER NOT NULL DEFAULT 0;`);
     }
+    const institutionColumns = db
+        .prepare(`PRAGMA table_info(institutions)`)
+        .all();
+    const institutionColNames = new Set(institutionColumns.map((column) => column.name));
+    if (!institutionColNames.has('color_scheme')) {
+        db.exec(`ALTER TABLE institutions ADD COLUMN color_scheme TEXT NOT NULL DEFAULT 'ocean';`);
+    }
     const iqColumns = db
         .prepare(`PRAGMA table_info(institution_questions)`)
         .all();
@@ -165,14 +173,31 @@ function runMigrations(db) {
     if (!respColNames.has('kiosk_session_id')) {
         db.exec(`ALTER TABLE responses ADD COLUMN kiosk_session_id INTEGER REFERENCES kiosk_sessions(id) ON DELETE SET NULL;`);
     }
+    db.exec(`
+    DELETE FROM responses
+    WHERE kiosk_session_id IS NOT NULL
+      AND id NOT IN (
+        SELECT MAX(id)
+        FROM responses
+        WHERE kiosk_session_id IS NOT NULL
+        GROUP BY kiosk_session_id, question_key
+      );
+
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_responses_session_question_unique
+      ON responses (kiosk_session_id, question_key)
+      WHERE kiosk_session_id IS NOT NULL;
+
+    CREATE INDEX IF NOT EXISTS idx_login_challenges_email_method_active
+      ON login_challenges (email, method, consumed_at, expires_at, created_at);
+  `);
 }
 function seedInstitution(db) {
     const existing = db.prepare('SELECT id FROM institutions ORDER BY id LIMIT 1').get();
     if (existing) {
         return existing;
     }
-    const insert = db.prepare('INSERT INTO institutions (name, slug, timezone, kiosk_mode_enabled) VALUES (?, ?, ?, ?)');
-    const result = insert.run('Downtown Clinic', 'downtown-clinic', 'America/New_York', 1);
+    const insert = db.prepare('INSERT INTO institutions (name, slug, timezone, kiosk_mode_enabled, color_scheme) VALUES (?, ?, ?, ?, ?)');
+    const result = insert.run('Downtown Clinic', 'downtown-clinic', 'America/New_York', 1, 'ocean');
     return { id: Number(result.lastInsertRowid) };
 }
 function seedUsers(db, institutionId) {

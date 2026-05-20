@@ -5,7 +5,7 @@ import { existsSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import { z } from 'zod';
 import { authenticateSession, changeOwnPassword, confirmPasswordReset, ensureSeedCredentials, listUsers, loginUser, logoutSession, registerUser, toggle2FA, updateUserEmail, updateUserStatus, userRoles, userStatuses, verifyMagicLinkChallenge, verifyOtpChallenge, verifyTurnstileToken, } from './auth.js';
-import { buildBootstrapPayload, confirmEmailVerification, createCustomQuestion, createInstitution, createInstitutionUser, createLoginChallenge, deleteCustomQuestion, deleteInstitution, getInstitution, getInstitutionAnalytics, getInstitutionQuestions, getCrossTabulation, getKioskStatus, getRootOverview, getSmtpSettings, listInstitutions, listInstitutionUsers, listQuestionTemplates, requestEmailVerification, requestPasswordReset, sendTestSmtpEmail, startKioskSession, submitKioskAnswer, completeKioskSession, toggleInstitutionKioskMode, updateInstitution, updateInstitutionQuestion, updateSmtpSettings, } from './services.js';
+import { buildBootstrapPayload, confirmEmailVerification, createCustomQuestion, createInstitution, createInstitutionUser, createLoginChallenge, deleteCustomQuestion, deleteInstitution, getInstitution, getInstitutionAnalytics, getInstitutionQuestions, getCrossTabulation, getKioskStatus, getRootOverview, getSmtpSettings, listInstitutions, listInstitutionUsers, listQuestionTemplates, requestEmailVerification, requestPasswordReset, sendTestSmtpEmail, setInstitutionColorScheme, startKioskSession, submitKioskAnswer, completeKioskSession, toggleInstitutionKioskMode, updateInstitution, updateInstitutionQuestion, updateSmtpSettings, } from './services.js';
 import { config } from './config.js';
 import { getDb } from './db.js';
 getDb();
@@ -73,6 +73,10 @@ const institutionSchema = z.object({
         .regex(/^[a-z0-9-]+$/, 'Slug must contain only lowercase letters, numbers, and hyphens')
         .optional(),
     timezone: z.string().trim().min(1).default('UTC'),
+    colorScheme: z.enum(['ocean', 'emerald', 'sunset', 'violet']).default('ocean'),
+});
+const institutionColorSchemeSchema = z.object({
+    colorScheme: z.enum(['ocean', 'emerald', 'sunset', 'violet']),
 });
 const createInstitutionUserSchema = z.object({
     email: z.string().email(),
@@ -103,9 +107,17 @@ const kioskAnswerSchema = z.object({
     questionKey: z.string().min(1),
     answer: z.unknown(),
 });
+const prohibitedDemographicKeys = new Set(['__proto__', 'prototype', 'constructor']);
+const demographicKeySchema = z
+    .string()
+    .trim()
+    .min(1)
+    .max(64)
+    .regex(/^[a-zA-Z0-9:_-]+$/)
+    .refine((key) => !prohibitedDemographicKeys.has(key), 'Invalid demographic key.');
 const kioskCompleteSchema = z.object({
     sessionToken: z.string().min(1),
-    demographicData: z.record(z.string(), z.string()).default({}),
+    demographicData: z.record(demographicKeySchema, z.string().trim().max(256)).default({}),
 });
 const smtpTestSchema = z.object({
     toAddress: z.string().email(),
@@ -164,6 +176,12 @@ function parseNumericId(value) {
         return null;
     }
     return parsed;
+}
+async function enforceMinResponseTime(startedAt, minimumMs) {
+    const remaining = minimumMs - (Date.now() - startedAt);
+    if (remaining > 0) {
+        await new Promise((resolve) => setTimeout(resolve, remaining));
+    }
 }
 function getAuthenticatedSession(req, res) {
     const token = extractBearerToken(req.header('authorization'));
@@ -261,6 +279,38 @@ export function createApp() {
             return res.status(404).json({ error: 'Institution not found.' });
         }
         return res.json(institution);
+    });
+    app.post('/api/institutions/:id/color-scheme', privilegedOpsLimiter, (req, res) => {
+        const auth = getAuthenticatedSession(req, res);
+        if (!auth) {
+            return;
+        }
+        if (!['root', 'institution_admin'].includes(auth.session.user.role)) {
+            return res.status(403).json({ error: 'Admin access required.' });
+        }
+        const institutionId = parseNumericId(req.params.id);
+        if (!institutionId) {
+            return res.status(400).json({ error: 'Invalid institution id.' });
+        }
+        if (auth.session.user.role === 'institution_admin' && auth.session.user.institutionId !== institutionId) {
+            return res.status(403).json({ error: 'Institution-scoped access required.' });
+        }
+        const parsed = institutionColorSchemeSchema.safeParse(req.body);
+        if (!parsed.success) {
+            return res.status(400).json({ error: 'Invalid color scheme payload.' });
+        }
+        try {
+            const institution = setInstitutionColorScheme(institutionId, parsed.data.colorScheme);
+            if (!institution) {
+                return res.status(404).json({ error: 'Institution not found.' });
+            }
+            return res.json(institution);
+        }
+        catch (error) {
+            return res.status(error instanceof Error && error.message === 'Institution not found.' ? 404 : 400).json({
+                error: error instanceof Error ? error.message : 'Unable to update institution.',
+            });
+        }
     });
     app.get('/api/auth/turnstile', (_req, res) => {
         res.json({
@@ -365,7 +415,8 @@ export function createApp() {
         if (!parsed.success) {
             return res.status(400).json({ error: 'Invalid login challenge request.' });
         }
-        return res.status(201).json(createLoginChallenge(parsed.data.email, parsed.data.method));
+        createLoginChallenge(parsed.data.email, parsed.data.method);
+        return res.status(202).json({ accepted: true });
     });
     app.post('/api/auth/challenges/verify', authChallengeLimiter, (req, res) => {
         const parsed = challengeVerifySchema.safeParse(req.body);
@@ -452,13 +503,15 @@ export function createApp() {
             return res.status(status).json({ error: msg });
         }
     });
-    app.post('/api/auth/password-reset/request', authChallengeLimiter, (req, res) => {
+    app.post('/api/auth/password-reset/request', authChallengeLimiter, async (req, res) => {
         const parsed = passwordResetRequestSchema.safeParse(req.body);
         if (!parsed.success) {
             return res.status(400).json({ error: 'Invalid password reset request.' });
         }
-        const result = requestPasswordReset(parsed.data.email);
-        return res.json(result);
+        const startedAt = Date.now();
+        requestPasswordReset(parsed.data.email);
+        await enforceMinResponseTime(startedAt, 150);
+        return res.status(202).json({ accepted: true });
     });
     app.post('/api/auth/password-reset/confirm', authChallengeLimiter, (req, res) => {
         const parsed = passwordResetConfirmSchema.safeParse(req.body);
