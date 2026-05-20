@@ -427,11 +427,11 @@ function App() {
 
   const saveSmtpSettings = async (event: FormEvent<HTMLFormElement>) => {
     if (!authToken) {
-      setError('Root session required to manage SMTP settings.')
+      setError('Administrator access is required to manage SMTP settings.')
       return
     }
     if (sessionUser?.role !== 'root') {
-      setError('Root session required to manage SMTP settings.')
+      setError('Administrator access is required to manage SMTP settings.')
       return
     }
 
@@ -544,28 +544,6 @@ function App() {
     }
     if (session.user.role === 'root') {
       await Promise.all([loadRootOverview(session.token), loadSmtpSettings(session.token), loadInstitutionList(session.token)])
-    }
-  }
-
-  const fetchSession = async () => {
-    if (!authToken) {
-      setError('Login first to fetch session state.')
-      return
-    }
-
-    const response = await fetch('/api/auth/session', {
-      headers: { Authorization: `Bearer ${authToken}` },
-    })
-
-    if (!response.ok) {
-      const result = (await response.json()) as { error?: string }
-      throw new Error(result.error ?? 'Unable to fetch session.')
-    }
-
-    const result = (await response.json()) as { user: AuthUser }
-    setSessionUser(result.user)
-    if (result.user.role === 'root') {
-      await Promise.all([loadRootOverview(authToken), loadSmtpSettings(authToken)])
     }
   }
 
@@ -690,7 +668,7 @@ function App() {
 
   const loadAuthUsers = async () => {
     if (!authToken) {
-      setError('Root session required to list users.')
+      setError('Administrator access is required to list users.')
       return
     }
 
@@ -708,7 +686,7 @@ function App() {
 
   const setUserStatus = async (id: number, status: AuthUser['status']) => {
     if (!authToken) {
-      setError('Root session required to update user status.')
+      setError('Administrator access is required to update user status.')
       return
     }
 
@@ -994,10 +972,6 @@ function App() {
               Quick Glimpse helps organizations capture in-person feedback quickly with kiosk surveys, secure sign-in, and easy analytics.
             </p>
           </div>
-          <div className="rounded-2xl border border-[var(--brand-600)] bg-[var(--brand-900)] px-4 py-3 text-sm text-white shadow-lg shadow-[color:var(--brand-shadow)]">
-            <div>Version {bootstrap.app.version}</div>
-            <div>Always-on feedback insights</div>
-          </div>
         </div>
         <div className="mx-auto flex w-full max-w-6xl gap-2 overflow-x-auto px-6 pb-6">
           {!sessionUser ? (
@@ -1061,7 +1035,7 @@ function App() {
                       <h3 className="text-lg font-semibold">Institutional command centre</h3>
                       <ul className="mt-4 space-y-3 text-sm text-slate-700">
                         <li className="rounded-xl bg-slate-50 px-3 py-2">✅ Institution admins control kiosk mode and question rotation.</li>
-                        <li className="rounded-xl bg-slate-50 px-3 py-2">✅ Root users monitor aggregate platform health and rollout readiness.</li>
+                        <li className="rounded-xl bg-slate-50 px-3 py-2">✅ Platform admins monitor aggregate platform health and rollout readiness.</li>
                         <li className="rounded-xl bg-slate-50 px-3 py-2">✅ Secure sign-in with password + OTP/magic-link verification choices.</li>
                         <li className="rounded-xl bg-slate-50 px-3 py-2">✅ Built-in SMTP configuration for enterprise email delivery workflows.</li>
                       </ul>
@@ -1093,7 +1067,7 @@ function App() {
                     <article className={statCardClass}>
                       <p className="text-sm font-medium text-slate-500">Kiosk-enabled</p>
                       <p className="mt-3 text-3xl font-semibold">{bootstrap.institutions.filter((item) => item.kioskModeEnabled).length}</p>
-                      <p className="mt-2 text-sm text-slate-600">Institutional users can toggle kiosk mode without involving root.</p>
+                      <p className="mt-2 text-sm text-slate-600">Institutional users can toggle kiosk mode without escalation to platform administration.</p>
                     </article>
                     <article className={statCardClass}>
                       <p className="text-sm font-medium text-slate-500">Demographic prompts</p>
@@ -1168,8 +1142,9 @@ function App() {
                       <button className="w-fit rounded-full bg-sky-700 px-5 py-2.5 text-sm font-semibold text-white" type="submit">Login</button>
                     </form>
                     <div className="mt-4 flex flex-wrap gap-2">
-                      <button className="rounded-full bg-slate-200 px-4 py-2 text-sm font-semibold" onClick={() => void fetchSession().catch((caughtError: unknown) => setError(caughtError instanceof Error ? caughtError.message : 'Session check failed.'))} type="button">Check session</button>
-                      <button className="rounded-full bg-slate-200 px-4 py-2 text-sm font-semibold" onClick={() => void logoutAuthUser().catch((caughtError: unknown) => setError(caughtError instanceof Error ? caughtError.message : 'Logout failed.'))} type="button">Logout</button>
+                      {sessionUser ? (
+                        <button className="rounded-full bg-slate-200 px-4 py-2 text-sm font-semibold" onClick={() => void logoutAuthUser().catch((caughtError: unknown) => setError(caughtError instanceof Error ? caughtError.message : 'Logout failed.'))} type="button">Logout</button>
+                      ) : null}
                     </div>
                     {pendingTwoFa ? (
                       <div className="mt-4 rounded-xl border border-sky-200 bg-sky-50 px-4 py-4 text-sm">
@@ -1202,7 +1177,7 @@ function App() {
                 <div className="grid gap-6 lg:grid-cols-2">
                   {sessionUser?.role === 'root' ? (
                     <article className={statCardClass}>
-                    <h2 className="text-xl font-semibold">Account lifecycle (root only)</h2>
+                    <h2 className="text-xl font-semibold">Account lifecycle (administrator-only)</h2>
                     <button className="mt-4 rounded-full bg-slate-900 px-4 py-2 text-sm font-semibold text-white" onClick={() => void loadAuthUsers().catch((caughtError: unknown) => setError(caughtError instanceof Error ? caughtError.message : 'Unable to load users.'))} type="button">
                       Load users
                     </button>
@@ -1225,30 +1200,32 @@ function App() {
                     </div>
                     </article>
                   ) : null}
+                  {sessionUser ? (
                     <article className={statCardClass}>
-                    <h2 className="text-xl font-semibold">Email 2FA delivery options</h2>
-                    <form className="mt-4 grid gap-3" onSubmit={(event) => void createChallenge(event)}>
-                      <input className="rounded-xl border border-slate-300 px-3 py-2" name="email" placeholder="visitor@example.com" required type="email" />
-                      <fieldset className="grid gap-2 text-sm">
-                        {bootstrap.authOptions.map((option, index) => (
-                          <label key={option.id} className="flex items-start gap-3 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
-                            <input defaultChecked={index === 0} name="method" type="radio" value={option.id} />
-                            <span>
-                              <span className="block font-medium text-slate-900">{option.label}</span>
-                              <span className="text-slate-600">{option.description}</span>
-                            </span>
-                          </label>
-                        ))}
-                      </fieldset>
-                      <button className="w-fit rounded-full bg-slate-900 px-5 py-2.5 text-sm font-semibold text-white" type="submit">Send challenge</button>
-                    </form>
-                    {challenge ? (
-                      <div className="mt-4 rounded-xl bg-slate-50 px-4 py-3 text-sm text-slate-700">
-                        <div className="font-medium text-slate-900">{challenge.method === 'magic_link' ? 'Magic link' : 'One-time code'} details</div>
-                        <div className="mt-2 break-all">{challenge.preview.magicLink ?? challenge.preview.otpCode}</div>
-                      </div>
-                    ) : null}
-                  </article>
+                      <h2 className="text-xl font-semibold">Sign-in challenge preview</h2>
+                      <form className="mt-4 grid gap-3" onSubmit={(event) => void createChallenge(event)}>
+                        <input className="rounded-xl border border-slate-300 px-3 py-2" name="email" placeholder="visitor@example.com" required type="email" />
+                        <fieldset className="grid gap-2 text-sm">
+                          {bootstrap.authOptions.map((option, index) => (
+                            <label key={option.id} className="flex items-start gap-3 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
+                              <input defaultChecked={index === 0} name="method" type="radio" value={option.id} />
+                              <span>
+                                <span className="block font-medium text-slate-900">{option.label}</span>
+                                <span className="text-slate-600">{option.description}</span>
+                              </span>
+                            </label>
+                          ))}
+                        </fieldset>
+                        <button className="w-fit rounded-full bg-slate-900 px-5 py-2.5 text-sm font-semibold text-white" type="submit">Send challenge</button>
+                      </form>
+                      {challenge ? (
+                        <div className="mt-4 rounded-xl bg-slate-50 px-4 py-3 text-sm text-slate-700">
+                          <div className="font-medium text-slate-900">{challenge.method === 'magic_link' ? 'Magic link' : 'One-time code'} details</div>
+                          <div className="mt-2 break-all">{challenge.preview.magicLink ?? challenge.preview.otpCode}</div>
+                        </div>
+                      ) : null}
+                    </article>
+                  ) : null}
                 </div>
               </section>
             }
@@ -1259,7 +1236,7 @@ function App() {
               <section className="grid gap-6">
                 {sessionUser?.role === 'root' ? (
                   <article className={statCardClass}>
-                    <h2 className="text-xl font-semibold">Manage institutions (root only)</h2>
+                    <h2 className="text-xl font-semibold">Manage institutions (administrator-only)</h2>
                     <form className="mt-4 flex gap-3" onSubmit={(event) => void createInstitution(event).catch((err: unknown) => setError(err instanceof Error ? err.message : 'Failed.'))}>
                       <input className="flex-1 rounded-xl border border-slate-300 px-3 py-2" name="name" placeholder="Institution name" required />
                       <button className="rounded-full bg-slate-900 px-4 py-2 text-sm font-semibold text-white" type="submit">Create</button>
@@ -1366,7 +1343,7 @@ function App() {
             element={
               <section className="grid gap-6 lg:grid-cols-[1.1fr_0.9fr]">
                 <article className={statCardClass}>
-                  <h2 className="text-xl font-semibold">Aggregate-only root dashboard</h2>
+                  <h2 className="text-xl font-semibold">Aggregate-only platform dashboard</h2>
                   <div className="mt-5 grid gap-4 sm:grid-cols-2">
                     <div className="rounded-xl bg-slate-50 px-4 py-4">
                       <div className="text-sm text-slate-500">Institution users</div>
@@ -1397,7 +1374,7 @@ function App() {
                 <article className={statCardClass}>
                   <h2 className="text-xl font-semibold">Institution health</h2>
                   {!rootOverview ? (
-                    <p className="mt-3 text-sm text-amber-700">Root login is required to load aggregate metrics.</p>
+                    <p className="mt-3 text-sm text-amber-700">Administrator access is required to load aggregate metrics.</p>
                   ) : (
                     <div className="mt-4 overflow-x-auto">
                       <table className="w-full text-sm text-slate-700">
@@ -1423,7 +1400,7 @@ function App() {
                     </div>
                   )}
                   <p className="mt-4 text-sm text-slate-500">
-                    Root sees high-level counts only. Trendlines disabled by requirement.
+                    Administrative access sees high-level counts only. Trendlines disabled by requirement.
                   </p>
                 </article>
               </section>
@@ -1609,7 +1586,7 @@ function App() {
                       {savingSmtp ? 'Saving…' : 'Save SMTP settings'}
                     </button>
                     {sessionUser?.role !== 'root' ? (
-                      <p className="text-sm text-amber-700">Root login is required to view or edit SMTP settings.</p>
+                      <p className="text-sm text-amber-700">Administrator access is required to view or edit SMTP settings.</p>
                     ) : null}
                   </form>
                   <div className="mt-6 border-t border-slate-200 pt-5">
@@ -1892,7 +1869,7 @@ function App() {
                     <li>Enable kiosk mode from the Institutions view if visitor collection is paused.</li>
                     <li>Use Analytics for date-range response summaries and demographic cross-tab views.</li>
                     <li>Use Profile to update password and 2FA.</li>
-                    <li>Root users can manage SMTP settings and institution lifecycle controls.</li>
+                    <li>Platform administrators can manage SMTP settings and institution lifecycle controls.</li>
                   </ul>
                 </article>
               </section>
@@ -1926,7 +1903,7 @@ function App() {
                   <h2 className="text-xl font-semibold">Data Protection Impact Assessment (DPIA) summary</h2>
                   <p className="mt-2 text-sm text-slate-700">
                     Quick Glimpse minimises data processing by separating administrator account data from anonymous
-                    visitor response data and limiting root-level visibility to aggregate metrics.
+                    visitor response data and limiting privileged visibility to aggregate metrics.
                   </p>
                   <ul className="mt-4 list-disc space-y-2 pl-5 text-sm text-slate-700">
                     <li>Purpose limitation: service-quality measurement and operational insight.</li>

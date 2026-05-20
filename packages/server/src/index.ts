@@ -259,6 +259,11 @@ function parseNumericId(value: string | string[] | undefined) {
   return parsed
 }
 
+function logErrorSummary(message: string, details: Record<string, unknown>) {
+  console.error(`[${new Date().toISOString()}] ${message}`)
+  console.error(details)
+}
+
 async function enforceMinResponseTime(startedAt: number, minimumMs: number) {
   const remaining = minimumMs - (Date.now() - startedAt)
   if (remaining > 0) {
@@ -286,6 +291,40 @@ export function createApp() {
   const app = express()
   app.disable('x-powered-by')
   app.use(express.json({ limit: '50kb' }))
+  app.use((req, res, next) => {
+    const startedAt = Date.now()
+    let responseBody: unknown
+    const originalJson = res.json.bind(res)
+    res.json = ((body: unknown) => {
+      responseBody = body
+      return originalJson(body)
+    }) as typeof res.json
+
+    res.on('finish', () => {
+      if (res.statusCode < 400) {
+        return
+      }
+
+      const errorMessage =
+        typeof responseBody === 'object' &&
+        responseBody !== null &&
+        'error' in responseBody &&
+        typeof (responseBody as { error?: unknown }).error === 'string'
+          ? (responseBody as { error: string }).error
+          : null
+
+      logErrorSummary('HTTP request failed', {
+        method: req.method,
+        path: req.originalUrl,
+        statusCode: res.statusCode,
+        durationMs: Date.now() - startedAt,
+        ip: req.ip,
+        userAgent: req.get('user-agent') ?? null,
+        error: errorMessage,
+      })
+    })
+    next()
+  })
   app.use((req, res, next) => {
     res.setHeader('x-content-type-options', 'nosniff')
     res.setHeader('x-frame-options', 'DENY')
@@ -1059,6 +1098,21 @@ export function createApp() {
     })
   }
 
+  app.use((error: unknown, req: express.Request, res: express.Response, next: express.NextFunction) => {
+    logErrorSummary('Unhandled route error', {
+      method: req.method,
+      path: req.originalUrl,
+      ip: req.ip,
+      errorName: error instanceof Error ? error.name : null,
+      errorMessage: error instanceof Error ? error.message : String(error),
+      stack: error instanceof Error ? error.stack : null,
+    })
+    if (res.headersSent) {
+      return next(error)
+    }
+    return res.status(500).json({ error: 'Internal server error.' })
+  })
+
   return app
 }
 
@@ -1066,6 +1120,19 @@ const isDirectRun =
   Boolean(process.argv[1]) && import.meta.url === pathToFileURL(process.argv[1] ?? '').href
 
 if (isDirectRun) {
+  process.on('unhandledRejection', (reason) => {
+    logErrorSummary('Unhandled promise rejection', {
+      reason: reason instanceof Error ? reason.message : String(reason),
+      stack: reason instanceof Error ? reason.stack : null,
+    })
+  })
+  process.on('uncaughtException', (error) => {
+    logErrorSummary('Uncaught exception', {
+      errorName: error.name,
+      errorMessage: error.message,
+      stack: error.stack,
+    })
+  })
   const app = createApp()
   app.listen(config.port, () => {
     console.log(`Quick Glimpse listening on ${config.baseUrl}`)

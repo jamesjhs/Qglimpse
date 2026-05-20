@@ -60,9 +60,9 @@ SQLite with WAL journal mode. Foreign keys are enforced (`PRAGMA foreign_keys = 
 |--------|------|-------|
 | `id` | INTEGER PK | |
 | `email` | TEXT UNIQUE | Lowercase |
-| `role` | TEXT | `root`, `institution_admin`, `institution_user` |
+| `role` | TEXT | `platform_admin`, `institution_admin`, `institution_user` |
 | `status` | TEXT | `active`, `suspended`, `deactivated` |
-| `institution_id` | INTEGER FK | NULL for root accounts |
+| `institution_id` | INTEGER FK | NULL for platform-admin accounts |
 | `email_verified` | INTEGER | Boolean (0/1) |
 | `two_fa_enabled` | INTEGER | Boolean (0/1) |
 | `last_login_at` | TEXT | |
@@ -192,9 +192,9 @@ All API routes are prefixed `/api/`. Authenticated routes require an `Authorizat
 | `POST` | `/api/auth/login` | None | Log in; returns session token (requires Turnstile token) |
 | `GET` | `/api/auth/session` | Bearer | Validate session and return user info |
 | `POST` | `/api/auth/logout` | Bearer | Revoke the current session |
-| `GET` | `/api/auth/users` | Root | List all users |
-| `PATCH` | `/api/auth/users/:id/status` | Root | Update user status (`active`, `suspended`, `deactivated`) |
-| `PATCH` | `/api/auth/users/:id/2fa` | Self or root | Enable/disable 2FA for a user |
+| `GET` | `/api/auth/users` | Platform admin | List all users |
+| `PATCH` | `/api/auth/users/:id/status` | Platform admin | Update user status (`active`, `suspended`, `deactivated`) |
+| `PATCH` | `/api/auth/users/:id/2fa` | Self or platform admin | Enable/disable 2FA for a user |
 | `PATCH` | `/api/auth/profile` | Bearer | Update own email address |
 | `PATCH` | `/api/auth/profile/password` | Bearer | Change own password |
 | `POST` | `/api/auth/challenges` | None | Issue an OTP or magic-link challenge |
@@ -209,20 +209,20 @@ All API routes are prefixed `/api/`. Authenticated routes require an `Authorizat
 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
-| `GET` | `/api/institutions` | Root | List all institutions |
-| `POST` | `/api/institutions` | Root | Create an institution |
+| `GET` | `/api/institutions` | Platform admin | List all institutions |
+| `POST` | `/api/institutions` | Platform admin | Create an institution |
 | `GET` | `/api/institutions/:id` | Bearer | Get institution details |
-| `PUT` | `/api/institutions/:id` | Root | Update institution (name, slug, timezone) |
-| `DELETE` | `/api/institutions/:id` | Root | Delete institution (blocked if users assigned) |
-| `POST` | `/api/institutions/:id/kiosk-mode` | Root or inst. admin (own) | Enable/disable kiosk mode |
-| `GET` | `/api/institutions/:id/users` | Root or inst. admin (own) | List users in an institution |
-| `POST` | `/api/institutions/:id/users` | Root or inst. admin (own) | Create a user within an institution |
-| `GET` | `/api/institutions/:id/questions` | Root or inst. admin (own) | List institution questions |
-| `POST` | `/api/institutions/:id/questions` | Root or inst. admin (own) | Create a custom question |
-| `PATCH` | `/api/institutions/:id/questions/:questionId` | Root or inst. admin (own) | Update question settings/schedule |
-| `DELETE` | `/api/institutions/:id/questions/:questionId` | Root or inst. admin (own) | Delete a custom question |
-| `GET` | `/api/institutions/:id/analytics` | Root or any institution user (own) | Aggregated response analytics (optional `?from=&to=`) |
-| `GET` | `/api/institutions/:id/analytics/cross-tab` | Root or any institution user (own) | Cross-tabulation of a question by demographic (`?primaryKey=&demographicKey=`) |
+| `PUT` | `/api/institutions/:id` | Platform admin | Update institution (name, slug, timezone) |
+| `DELETE` | `/api/institutions/:id` | Platform admin | Delete institution (blocked if users assigned) |
+| `POST` | `/api/institutions/:id/kiosk-mode` | Platform admin or inst. admin (own) | Enable/disable kiosk mode |
+| `GET` | `/api/institutions/:id/users` | Platform admin or inst. admin (own) | List users in an institution |
+| `POST` | `/api/institutions/:id/users` | Platform admin or inst. admin (own) | Create a user within an institution |
+| `GET` | `/api/institutions/:id/questions` | Platform admin or inst. admin (own) | List institution questions |
+| `POST` | `/api/institutions/:id/questions` | Platform admin or inst. admin (own) | Create a custom question |
+| `PATCH` | `/api/institutions/:id/questions/:questionId` | Platform admin or inst. admin (own) | Update question settings/schedule |
+| `DELETE` | `/api/institutions/:id/questions/:questionId` | Platform admin or inst. admin (own) | Delete a custom question |
+| `GET` | `/api/institutions/:id/analytics` | Platform admin or any institution user (own) | Aggregated response analytics (optional `?from=&to=`) |
+| `GET` | `/api/institutions/:id/analytics/cross-tab` | Platform admin or any institution user (own) | Cross-tabulation of a question by demographic (`?primaryKey=&demographicKey=`) |
 
 ### Kiosk runtime (public)
 
@@ -243,15 +243,9 @@ All API routes are prefixed `/api/`. Authenticated routes require an `Authorizat
 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
-| `GET` | `/api/settings/smtp` | Root | Read SMTP settings |
-| `PUT` | `/api/settings/smtp` | Root | Update SMTP settings |
-| `POST` | `/api/settings/smtp/test` | Root | Send a test email (`{ "toAddress": "..." }`) |
-
-### Root overview
-
-| Method | Path | Auth | Description |
-|--------|------|------|-------------|
-| `GET` | `/api/root/overview` | Root | Aggregate counts (institutions, users, sessions) |
+| `GET` | `/api/settings/smtp` | Platform admin | Read SMTP settings |
+| `PUT` | `/api/settings/smtp` | Platform admin | Update SMTP settings |
+| `POST` | `/api/settings/smtp/test` | Platform admin | Send a test email (`{ "toAddress": "..." }`) |
 
 ---
 
@@ -263,7 +257,7 @@ Rate limiters are **disabled in dev-bypass mode**.
 |---------|--------|-------|-----------|
 | `authChallengeLimiter` | 5 min | 5 requests | Challenge issue/verify, password reset, magic link, kiosk session start |
 | `authCoreLimiter` | 5 min | 20 requests | Login, register, logout, session, profile, user management |
-| `privilegedOpsLimiter` | 5 min | 40 requests | Institutions, questions, analytics, SMTP, root overview |
+| `privilegedOpsLimiter` | 5 min | 40 requests | Institutions, questions, analytics, SMTP, privileged overview |
 | `spaShellLimiter` | 1 min | 240 requests | SPA shell fallback (all non-API GET requests when dist is built) |
 | `fallbackLimiter` | 1 min | 120 requests | Fallback HTML when dist is not built |
 

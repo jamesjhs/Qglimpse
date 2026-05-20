@@ -2,7 +2,7 @@
 
 ## Processing description
 
-Quick Glimpse collects anonymous visitor feedback and optional demographic categories, then presents institution-level analytics and root-level aggregate platform metrics.
+Quick Glimpse collects anonymous visitor feedback and optional demographic categories, then presents institution-level analytics and privileged aggregate platform metrics.
 
 ## Necessity and proportionality
 
