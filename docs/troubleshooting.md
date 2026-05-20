@@ -59,21 +59,17 @@ npm start
 
 ### `Turnstile verification failed` on login or registration
 
-**Cause (production):** The `TURNSTILE_SITE_KEY` / `TURNSTILE_SECRET_KEY` env vars are mismatched, or the widget token has expired (tokens are single-use, valid for ~2 minutes).
+**Cause:** The request did not include the expected bypass token.
 
 **Fix:**
-- Verify both keys in the Cloudflare Turnstile dashboard match what the server and SPA use.
-- Ensure the page is not cached — a stale SPA may submit an expired token.
-
-**Cause (development):** `TURNSTILE_SECRET_KEY` is set but you are passing the dev-bypass token.
-
-**Fix:** Unset `TURNSTILE_SECRET_KEY` for local dev, or obtain a real token from the widget.
+- Ensure the submitted token is `dev-turnstile-pass`.
+- Reload the page and retry if the client token field was changed manually.
 
 ### Rate limit `429` on auth endpoints
 
 **Cause:** More than 5 challenge/reset requests in a 5-minute window from the same IP, or more than 20 login/register attempts.
 
-**Fix (development):** Ensure `TURNSTILE_SECRET_KEY` is **unset** — rate limiters are skipped in dev-bypass mode.
+**Fix:** Rate limiters are skipped in dev-bypass mode; verify the app is running with default auth config and retry.
 
 **Fix (production):** Wait for the window to expire, or adjust `windowMs` / `limit` in `packages/server/src/index.ts` if the defaults are too restrictive for your traffic pattern.
 

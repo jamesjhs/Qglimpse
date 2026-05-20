@@ -2,7 +2,7 @@
 
 Quick Glimpse is a Docker-contained PWA for institution-specific visitor insight collection. Steps 1–10 are complete, covering the full feature set from auth core through kiosk runtime, analytics, and SMTP integration.
 
-Server/setup variables are loaded from the root `.env` file.
+Copy `.env.example` to `.env` and set your own values before first run.
 
 ## Features
 
@@ -53,13 +53,13 @@ Then open `http://localhost:3000`.
 - Root overview limited to aggregate counts only and restricted to root sessions
 - SMTP settings limited to the approved field set, restricted to root sessions
 - `/readyz` health endpoint, Docker baseline, and PM2 ecosystem file
-- Rate limiters bypass in dev mode (when `TURNSTILE_SECRET_KEY` is not set)
+- Rate limiters bypass in dev-bypass mode
 
 ## Auth seed accounts (local defaults)
 
 - Root: `root@quickglimpse.local` / `ChangeMeRoot123!`
 - Institution admin: `institution-admin@quickglimpse.local` / `ChangeMeInstitution123!`
-- Turnstile dev bypass token (when no `TURNSTILE_SECRET_KEY` is set): `dev-turnstile-pass`
+- Turnstile dev bypass token: `dev-turnstile-pass`
 
 ## User-facing workflow
 

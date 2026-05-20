@@ -10,7 +10,7 @@
 
 ## Environment variables
 
-The project now loads setup/runtime variables from the root `.env` file.
+Copy `.env.example` to `.env`, then set your own deployment values.
 
 | Variable | Description |
 |----------|-------------|
@@ -22,26 +22,19 @@ The project now loads setup/runtime variables from the root `.env` file.
 | `QUICKGLIMPSE_SESSION_TTL_MS` | Session token lifetime in milliseconds |
 | `QUICKGLIMPSE_ROOT_SEED_PASSWORD` | Seed password for the root account on first run |
 | `QUICKGLIMPSE_INSTITUTION_SEED_PASSWORD` | Seed password for the seeded institution-admin account |
-| `TURNSTILE_SITE_KEY` | Cloudflare Turnstile site key |
-| `TURNSTILE_SECRET_KEY` | Cloudflare Turnstile secret key |
-| `TURNSTILE_DEV_BYPASS_TOKEN` | Token accepted in place of a real Turnstile token when `TURNSTILE_SECRET_KEY` is unset |
-| `TURNSTILE_CF_ACCESS_CLIENT_ID` | Optional CF Access client ID header for Turnstile verification calls |
-| `TURNSTILE_CF_ACCESS_CLIENT_SECRET` | Optional CF Access client secret header for Turnstile verification calls |
+| `CF-Access-Client-Id` | CF Access client ID header for Turnstile verification calls |
+| `CF-Access-Client-Secret` | CF Access client secret header for Turnstile verification calls |
 | `SMTP_USERNAME` | Initial SMTP username |
 | `SMTP_PASSWORD` | Initial SMTP password |
 | `SMTP_SEND_ADDRESS` | Initial SMTP send address |
 | `SMTP_SERVER_ADDRESS` | Initial SMTP server host |
 | `SMTP_PORT` | Initial SMTP server port |
 | `SMTP_SECURE_LOGIN_TYPE` | Initial SMTP secure mode (`none`, `ssl`, `starttls`) |
-| `APP_VERSION` | Version reported by `/readyz` |
-
 ### Dev-bypass mode
 
-When `TURNSTILE_SECRET_KEY` is **not** set, the server enters dev-bypass mode:
-- All Turnstile checks accept the value of `TURNSTILE_DEV_BYPASS_TOKEN`.
+Turnstile verification currently uses the built-in development bypass token:
+- All Turnstile checks accept `dev-turnstile-pass`.
 - All rate limiters are disabled.
-
-Set `TURNSTILE_SECRET_KEY` in any environment exposed to real users.
 
 ## First-run steps (bare Node)
 
