@@ -52,6 +52,7 @@ SQLite with WAL journal mode. Foreign keys are enforced (`PRAGMA foreign_keys = 
 | `slug` | TEXT UNIQUE | URL-safe identifier used in kiosk routes |
 | `timezone` | TEXT | IANA timezone string |
 | `kiosk_mode_enabled` | INTEGER | Boolean flag (0/1) |
+| `color_scheme` | TEXT | Theme name: `ocean`, `emerald`, `sunset`, `violet` |
 | `created_at` | TEXT | ISO 8601 timestamp |
 
 ### `users`
@@ -60,7 +61,7 @@ SQLite with WAL journal mode. Foreign keys are enforced (`PRAGMA foreign_keys = 
 |--------|------|-------|
 | `id` | INTEGER PK | |
 | `email` | TEXT UNIQUE | Lowercase |
-| `role` | TEXT | `platform_admin`, `institution_admin`, `institution_user` |
+| `role` | TEXT | `root`, `institution_admin`, `institution_user` |
 | `status` | TEXT | `active`, `suspended`, `deactivated` |
 | `institution_id` | INTEGER FK | NULL for platform-admin accounts |
 | `email_verified` | INTEGER | Boolean (0/1) |
@@ -212,9 +213,10 @@ All API routes are prefixed `/api/`. Authenticated routes require an `Authorizat
 | `GET` | `/api/institutions` | Platform admin | List all institutions |
 | `POST` | `/api/institutions` | Platform admin | Create an institution |
 | `GET` | `/api/institutions/:id` | Bearer | Get institution details |
-| `PUT` | `/api/institutions/:id` | Platform admin | Update institution (name, slug, timezone) |
+| `PUT` | `/api/institutions/:id` | Platform admin | Update institution (name, slug, timezone, colorScheme) |
 | `DELETE` | `/api/institutions/:id` | Platform admin | Delete institution (blocked if users assigned) |
 | `POST` | `/api/institutions/:id/kiosk-mode` | Platform admin or inst. admin (own) | Enable/disable kiosk mode |
+| `POST` | `/api/institutions/:id/color-scheme` | Platform admin or inst. admin (own) | Update institution colour theme (`ocean`, `emerald`, `sunset`, `violet`) |
 | `GET` | `/api/institutions/:id/users` | Platform admin or inst. admin (own) | List users in an institution |
 | `POST` | `/api/institutions/:id/users` | Platform admin or inst. admin (own) | Create a user within an institution |
 | `GET` | `/api/institutions/:id/questions` | Platform admin or inst. admin (own) | List institution questions |

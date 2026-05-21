@@ -74,3 +74,28 @@ test('suspending user revokes sessions and blocks new login', () => {
     /Account is suspended/,
   )
 })
+
+test('initial admin login command helper updates root credentials', () => {
+  const admin = auth.ensureInitialAdminLogin({
+    email: 'platform-admin@example.com',
+    password: 'EvenBetterPassword123!',
+  })
+  assert.equal(admin.role, 'root')
+  assert.equal(admin.email, 'platform-admin@example.com')
+
+  assert.throws(
+    () =>
+      auth.loginUser({
+        email: 'root@quickglimpse.local',
+        password: 'ChangeMeRoot123!',
+      }),
+    /Invalid email or password/,
+  )
+
+  const session = auth.loginUser({
+    email: 'platform-admin@example.com',
+    password: 'EvenBetterPassword123!',
+  })
+  assert.equal(session.user.role, 'root')
+  assert.equal(session.mustChangePassword, true)
+})

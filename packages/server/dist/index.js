@@ -4,7 +4,7 @@ import path from 'node:path';
 import { existsSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import { z } from 'zod';
-import { authenticateSession, changeOwnPassword, confirmPasswordReset, ensureSeedCredentials, listUsers, loginUser, logoutSession, registerUser, toggle2FA, updateUserEmail, updateUserStatus, userRoles, userStatuses, verifyMagicLinkChallenge, verifyOtpChallenge, verifyTurnstileToken, } from './auth.js';
+import { authenticateSession, changeOwnPassword, confirmPasswordReset, ensureInitialAdminLogin, ensureSeedCredentials, listUsers, loginUser, logoutSession, registerUser, toggle2FA, updateUserEmail, updateUserStatus, userRoles, userStatuses, verifyMagicLinkChallenge, verifyOtpChallenge, verifyTurnstileToken, } from './auth.js';
 import { buildBootstrapPayload, confirmEmailVerification, createCustomQuestion, createInstitution, createInstitutionUser, createLoginChallenge, deleteCustomQuestion, deleteInstitution, getInstitution, getInstitutionAnalytics, getInstitutionQuestions, getCrossTabulation, getKioskStatus, getRootOverview, getSmtpSettings, listInstitutions, listInstitutionUsers, listQuestionTemplates, requestEmailVerification, requestPasswordReset, sendTestSmtpEmail, setInstitutionColorScheme, startKioskSession, submitKioskAnswer, completeKioskSession, toggleInstitutionKioskMode, updateInstitution, updateInstitutionQuestion, updateSmtpSettings, } from './services.js';
 import { config } from './config.js';
 import { getDb } from './db.js';
@@ -963,22 +963,82 @@ export function createApp() {
     return app;
 }
 const isDirectRun = Boolean(process.argv[1]) && import.meta.url === pathToFileURL(process.argv[1] ?? '').href;
+function parseAdminInitArgs(argv) {
+    const options = { mustChangePassword: true };
+    for (let index = 0; index < argv.length; index += 1) {
+        const arg = argv[index];
+        if (!arg.startsWith('--')) {
+            continue;
+        }
+        const equalIndex = arg.indexOf('=');
+        const key = (equalIndex >= 0 ? arg.slice(2, equalIndex) : arg.slice(2)).trim();
+        const inlineValue = equalIndex >= 0 ? arg.slice(equalIndex + 1) : undefined;
+        const value = inlineValue ?? argv[index + 1];
+        if (inlineValue === undefined) {
+            index += 1;
+        }
+        if (!value || value.startsWith('--')) {
+            throw new Error(`Missing value for --${key}.`);
+        }
+        if (key === 'email') {
+            options.email = value;
+        }
+        else if (key === 'password') {
+            options.password = value;
+        }
+        else if (key === 'must-change-password') {
+            if (!['true', 'false'].includes(value)) {
+                throw new Error('must-change-password must be true or false.');
+            }
+            options.mustChangePassword = value === 'true';
+        }
+    }
+    return options;
+}
+function printAdminInitUsage() {
+    console.log('Usage: npm run admin:init -- --email <email> --password <password> [--must-change-password=true|false]');
+}
 if (isDirectRun) {
-    process.on('unhandledRejection', (reason) => {
-        logErrorSummary('Unhandled promise rejection', {
-            reason: reason instanceof Error ? reason.message : String(reason),
-            stack: reason instanceof Error ? reason.stack : null,
+    if (process.argv[2] === 'init-admin') {
+        try {
+            const options = parseAdminInitArgs(process.argv.slice(3));
+            if (!options.email || !options.password) {
+                printAdminInitUsage();
+                process.exitCode = 1;
+            }
+            else {
+                const user = ensureInitialAdminLogin({
+                    email: options.email,
+                    password: options.password,
+                    mustChangePassword: options.mustChangePassword,
+                });
+                console.log(`Initial admin login configured for ${user.email}.`);
+                console.log(`mustChangePassword: ${options.mustChangePassword ? 'true' : 'false'}`);
+            }
+        }
+        catch (error) {
+            console.error(error instanceof Error ? error.message : String(error));
+            printAdminInitUsage();
+            process.exitCode = 1;
+        }
+    }
+    else {
+        process.on('unhandledRejection', (reason) => {
+            logErrorSummary('Unhandled promise rejection', {
+                reason: reason instanceof Error ? reason.message : String(reason),
+                stack: reason instanceof Error ? reason.stack : null,
+            });
         });
-    });
-    process.on('uncaughtException', (error) => {
-        logErrorSummary('Uncaught exception', {
-            errorName: error.name,
-            errorMessage: error.message,
-            stack: error.stack,
+        process.on('uncaughtException', (error) => {
+            logErrorSummary('Uncaught exception', {
+                errorName: error.name,
+                errorMessage: error.message,
+                stack: error.stack,
+            });
         });
-    });
-    const app = createApp();
-    app.listen(config.port, () => {
-        console.log(`Quick Glimpse listening on ${config.baseUrl}`);
-    });
+        const app = createApp();
+        app.listen(config.port, () => {
+            console.log(`Quick Glimpse listening on ${config.baseUrl}`);
+        });
+    }
 }

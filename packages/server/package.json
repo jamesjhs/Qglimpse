@@ -1,12 +1,13 @@
 {
   "name": "@quickglimpse/server",
   "private": true,
-  "version": "0.2.0",
+  "version": "0.3.0",
   "type": "module",
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "build": "tsc -p tsconfig.json",
     "start": "node dist/index.js",
+    "create-initial-admin": "npm run build && node dist/index.js init-admin",
     "lint": "eslint \"src/**/*.ts\"",
     "test": "npm run build && node --test tests/*.test.js"
   },

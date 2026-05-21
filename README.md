@@ -1,6 +1,6 @@
 # quickglimpse
 
-Quick Glimpse is a Docker-contained PWA for institution-specific visitor insight collection. Steps 1–10 are complete, covering the full feature set from auth core through kiosk runtime, analytics, and SMTP integration.
+Quick Glimpse is a Docker-contained PWA for institution-specific visitor insight collection. v0.3.0 covers the full feature set from auth core through kiosk runtime, analytics, SMTP integration, and CLI-based initial admin setup.
 
 Copy `.env.example` to `.env` and set your own values before first run.
 
@@ -57,8 +57,17 @@ Then open `http://localhost:3000`.
 
 ## Auth seed accounts (local defaults)
 
+- Root/platform admin: `root@quickglimpse.local` / `ChangeMeRoot123!`
 - Institution admin: `institution-admin@quickglimpse.local` / `ChangeMeInstitution123!`
 - Turnstile dev bypass token: `dev-turnstile-pass`
+
+## Create initial platform admin via CLI
+
+```bash
+npm run admin:init -- --email admin@example.com --password 'ChangeMeNow123!'
+```
+
+Optional: append `--must-change-password=false` if you do not want the first login to force a password change.
 
 ## User-facing workflow
 
@@ -81,12 +90,13 @@ Then open `http://localhost:3000`.
 - Can read/update SMTP settings.
 - Full institution CRUD: create, rename, delete (blocked if users assigned).
 
-## API summary (Steps 2–10)
+## API summary
 
 See [docs/technical.md](docs/technical.md) for the full API reference. Key route groups:
 
 | Method | Path | Access |
 |--------|------|--------|
+| `POST` | `/api/auth/challenges` | Public |
 | `POST` | `/api/auth/challenges/verify` | Public |
 | `GET` | `/api/auth/magic-link?token=` | Public |
 | `POST` | `/api/auth/password-reset/request` | Public |
@@ -98,12 +108,14 @@ See [docs/technical.md](docs/technical.md) for the full API reference. Key route
 | `PATCH` | `/api/auth/profile/password` | Authenticated |
 | `GET/POST` | `/api/institutions` | Platform admin |
 | `GET/PUT/DELETE` | `/api/institutions/:id` | Platform admin |
+| `POST` | `/api/institutions/:id/color-scheme` | Platform admin or inst. admin (own) |
 | `GET` | `/api/institutions/:id/users` | Platform admin or institution_admin (own) |
 | `POST` | `/api/institutions/:id/users` | Platform admin or institution_admin (own) |
 | `GET/POST/PATCH/DELETE` | `/api/institutions/:id/questions` | Platform admin or institution_admin (own) |
 | `GET` | `/api/institutions/:id/analytics` | Platform admin or institution user (own) |
 | `GET` | `/api/institutions/:id/analytics/cross-tab` | Platform admin or institution user (own) |
-| `GET/POST` | `/api/kiosk/:slug/session` | Public |
+| `GET` | `/api/kiosk/:slug/status` | Public |
+| `POST` | `/api/kiosk/:slug/session` | Public |
 | `POST` | `/api/kiosk/answer` | Public |
 | `POST` | `/api/kiosk/complete` | Public |
 | `GET/PUT` | `/api/settings/smtp` | Platform admin |

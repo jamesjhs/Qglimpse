@@ -365,6 +365,78 @@ export function ensureSeedCredentials() {
   }
 }
 
+export function ensureInitialAdminLogin(input: {
+  email: string
+  password: string
+  mustChangePassword?: boolean
+}) {
+  const db = getDb()
+  const normalizedEmail = normalizeEmail(input.email)
+  if (!normalizedEmail) {
+    throw new Error('Email is required.')
+  }
+  if (!input.password || input.password.length < 10) {
+    throw new Error('Password must be at least 10 characters.')
+  }
+
+  const existingRoot = db
+    .prepare(`SELECT id FROM users WHERE role = 'root' ORDER BY id LIMIT 1`)
+    .get() as { id: number } | undefined
+
+  const rootUserId = existingRoot
+    ? existingRoot.id
+    : Number(
+        db
+          .prepare(`INSERT INTO users (email, role, status, institution_id) VALUES (?, 'root', 'active', NULL)`)
+          .run(normalizedEmail).lastInsertRowid,
+      )
+
+  const emailConflict = db
+    .prepare('SELECT id FROM users WHERE email = ? AND id != ?')
+    .get(normalizedEmail, rootUserId) as { id: number } | undefined
+  if (emailConflict) {
+    throw new Error('A user with this email already exists.')
+  }
+
+  db.prepare(
+    `UPDATE users
+     SET email = ?,
+         status = 'active',
+         institution_id = NULL,
+         deactivated_at = NULL
+     WHERE id = ?`,
+  ).run(normalizedEmail, rootUserId)
+
+  const mustChangePassword = input.mustChangePassword ?? true
+  const passwordHash = hashSync(input.password, 12)
+  const existingCredential = db
+    .prepare('SELECT user_id FROM user_credentials WHERE user_id = ?')
+    .get(rootUserId) as { user_id: number } | undefined
+
+  if (existingCredential) {
+    db.prepare(
+      `UPDATE user_credentials
+       SET password_hash = ?, must_change_password = ?, updated_at = CURRENT_TIMESTAMP
+       WHERE user_id = ?`,
+    ).run(passwordHash, mustChangePassword ? 1 : 0, rootUserId)
+  } else {
+    db.prepare(
+      'INSERT INTO user_credentials (user_id, password_hash, must_change_password) VALUES (?, ?, ?)',
+    ).run(rootUserId, passwordHash, mustChangePassword ? 1 : 0)
+  }
+
+  db.prepare('UPDATE auth_sessions SET revoked_at = CURRENT_TIMESTAMP WHERE user_id = ? AND revoked_at IS NULL').run(rootUserId)
+
+  return db
+    .prepare(
+      `SELECT id, email, role, status, institution_id AS institutionId, created_at AS createdAt,
+              last_login_at AS lastLoginAt, deactivated_at AS deactivatedAt
+       FROM users
+       WHERE id = ?`,
+    )
+    .get(rootUserId) as UserRow
+}
+
 export function changeOwnPassword(userId: number, currentPassword: string, newPassword: string) {
   const db = getDb()
   const row = db

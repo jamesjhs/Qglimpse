@@ -1,7 +1,7 @@
 {
   "name": "quickglimpse",
   "private": true,
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Quick Glimpse foundation scaffold for institution visitor insights.",
   "workspaces": [
     "packages/*"
@@ -11,7 +11,8 @@
     "lint": "npm run lint --workspace @quickglimpse/web && npm run lint --workspace @quickglimpse/server",
     "test": "npm run test --workspace @quickglimpse/server",
     "start": "npm run start --workspace @quickglimpse/server",
-    "dev": "npm run dev --workspace @quickglimpse/server"
+    "dev": "npm run dev --workspace @quickglimpse/server",
+    "admin:init": "npm run create-initial-admin --workspace @quickglimpse/server --"
   },
   "engines": {
     "node": ">=20.18"
