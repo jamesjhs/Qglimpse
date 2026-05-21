@@ -60,6 +60,7 @@ Health check: `http://localhost:3000/readyz`
 
 | Email | Password | Role |
 |-------|----------|------|
+| `root@quickglimpse.local` | `ChangeMeRoot123!` | Platform admin (root) |
 | `institution-admin@quickglimpse.local` | `ChangeMeInstitution123!` | Institution admin |
 
 Change these passwords immediately after first login, or override them via the seed-password env vars before the first run.
@@ -111,7 +112,7 @@ Vite defaults to port `5173`; configure its proxy in `packages/web/vite.config.*
 ```bash
 npm run lint    # ESLint across all workspaces
 npm run build   # Type-check + compile
-npm test        # Server unit tests (Vitest)
+npm test        # Server unit tests (Node.js built-in test runner)
 ```
 
 ## Production process manager

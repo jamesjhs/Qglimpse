@@ -1,6 +1,6 @@
 # Docker quick start
 
-1. From `/home/runner/work/quickglimpse/quickglimpse`, build the image:
+1. From the repository root, build the image:
    ```bash
    docker compose build
    ```
@@ -26,3 +26,8 @@
 - `PORT` — listening port inside the container
 - `QUICKGLIMPSE_BASE_URL` — public base URL used for generated magic-link previews
 - `QUICKGLIMPSE_DATA_DIR` — SQLite storage directory inside the container
+- `QUICKGLIMPSE_DB_PATH` — full path to the SQLite database file
+- `QUICKGLIMPSE_ROOT_SEED_PASSWORD` — seed password for the root/platform-admin account
+- `QUICKGLIMPSE_INSTITUTION_SEED_PASSWORD` — seed password for the seeded institution-admin account
+
+See [install.md](install.md) for the full environment variable reference.
