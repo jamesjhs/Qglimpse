@@ -1,9 +1,26 @@
+import fs from 'node:fs'
 import tailwindcss from '@tailwindcss/vite'
 import react from '@vitejs/plugin-react'
 import { defineConfig } from 'vite'
 import { VitePWA } from 'vite-plugin-pwa'
 
+const outDir = new URL('./dist', import.meta.url)
+const canEmptyOutDir = (() => {
+  try {
+    if (!fs.existsSync(outDir)) {
+      return true
+    }
+    fs.accessSync(outDir, fs.constants.W_OK)
+    return true
+  } catch {
+    return false
+  }
+})()
+
 export default defineConfig({
+  build: {
+    emptyOutDir: canEmptyOutDir,
+  },
   plugins: [
     react(),
     tailwindcss(),
