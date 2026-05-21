@@ -60,6 +60,14 @@ Then open `http://localhost:3000`.
 - Institution admin: `institution-admin@quickglimpse.local` / `ChangeMeInstitution123!`
 - Turnstile dev bypass token: `dev-turnstile-pass`
 
+## Create initial platform admin via CLI
+
+```bash
+npm run admin:init -- --email admin@example.com --password 'ChangeMeNow123!'
+```
+
+Optional: append `--must-change-password=false` if you do not want the first login to force a password change.
+
 ## User-facing workflow
 
 1. Sign in via **Auth core** with email + password.

@@ -20,6 +20,7 @@ Copy `.env.example` to `.env`, then set your own deployment values.
 | `QUICKGLIMPSE_DB_PATH` | Full path to the SQLite database file |
 | `QUICKGLIMPSE_DB_ENCRYPTION_KEY` | Database encryption key value for deployment environments |
 | `QUICKGLIMPSE_SESSION_TTL_MS` | Session token lifetime in milliseconds |
+| `QUICKGLIMPSE_ROOT_SEED_PASSWORD` | Seed password for the seeded root/platform-admin account |
 | `QUICKGLIMPSE_INSTITUTION_SEED_PASSWORD` | Seed password for the seeded institution-admin account |
 | `CF-Access-Client-Id` | CF Access client ID header for Turnstile verification calls |
 | `CF-Access-Client-Secret` | CF Access client secret header for Turnstile verification calls |
@@ -62,6 +63,14 @@ Health check: `http://localhost:3000/readyz`
 | `institution-admin@quickglimpse.local` | `ChangeMeInstitution123!` | Institution admin |
 
 Change these passwords immediately after first login, or override them via the seed-password env vars before the first run.
+
+### Configure initial platform admin from CLI
+
+```bash
+npm run admin:init -- --email admin@example.com --password 'ChangeMeNow123!'
+```
+
+Optional: append `--must-change-password=false` if you do not want the first login to force a password change.
 
 ## Docker workflow
 
