@@ -22,19 +22,21 @@ Copy `.env.example` to `.env`, then set your own deployment values.
 | `QUICKGLIMPSE_SESSION_TTL_MS` | Session token lifetime in milliseconds |
 | `QUICKGLIMPSE_ROOT_SEED_PASSWORD` | Seed password for the seeded root/platform-admin account |
 | `QUICKGLIMPSE_INSTITUTION_SEED_PASSWORD` | Seed password for the seeded institution-admin account |
-| `CF-Access-Client-Id` | CF Access client ID header for Turnstile verification calls |
-| `CF-Access-Client-Secret` | CF Access client secret header for Turnstile verification calls |
+| `TURNSTILE_SITE_KEY` | Cloudflare Turnstile site key for the browser widget; required in deployed environments |
+| `TURNSTILE_SECRET_KEY` | Cloudflare Turnstile secret key for server-side token verification; required in deployed environments |
 | `SMTP_USERNAME` | Initial SMTP username |
 | `SMTP_PASSWORD` | Initial SMTP password |
 | `SMTP_SEND_ADDRESS` | Initial SMTP send address |
 | `SMTP_SERVER_ADDRESS` | Initial SMTP server host |
 | `SMTP_PORT` | Initial SMTP server port |
 | `SMTP_SECURE_LOGIN_TYPE` | Initial SMTP secure mode (`none`, `ssl`, `starttls`) |
-### Dev-bypass mode
+### Turnstile configuration
 
-Turnstile verification currently uses the built-in development bypass token:
-- All Turnstile checks accept `dev-turnstile-pass`.
-- All rate limiters are disabled.
+Create a Cloudflare Turnstile widget in the Cloudflare dashboard, then set `TURNSTILE_SITE_KEY` and `TURNSTILE_SECRET_KEY` in `.env`.
+
+When `TURNSTILE_SECRET_KEY` is empty, local development uses the built-in bypass token:
+- Turnstile checks accept `dev-turnstile-pass`.
+- Auth and shell rate limiters are disabled.
 
 ## First-run steps (bare Node)
 

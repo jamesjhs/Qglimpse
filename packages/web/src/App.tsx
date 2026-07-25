@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import type { CSSProperties, FormEvent } from 'react'
 import { Navigate, NavLink, Route, Routes, useSearchParams } from 'react-router-dom'
 
@@ -108,16 +108,6 @@ type SmtpFormState = {
   secureLoginType: 'none' | 'ssl' | 'starttls'
 }
 
-type ChallengePreview = {
-  email: string
-  method: 'email_code' | 'magic_link'
-  expiresAt: string
-  preview: {
-    otpCode?: string
-    magicLink?: string
-  }
-}
-
 type TwoFaPending = {
   challengePending: true
   email: string
@@ -135,6 +125,27 @@ type AuthUser = {
   role: 'root' | 'institution_admin' | 'institution_user'
   status: 'active' | 'suspended' | 'deactivated'
   institutionId: number | null
+}
+
+type TurnstileWidgetId = string | number
+
+declare global {
+  interface Window {
+    turnstile?: {
+      render: (
+        container: HTMLElement,
+        options: {
+          sitekey: string
+          theme?: 'light' | 'dark' | 'auto'
+          callback?: (token: string) => void
+          'expired-callback'?: () => void
+          'error-callback'?: () => void
+        },
+      ) => TurnstileWidgetId
+      remove: (widgetId: TurnstileWidgetId) => void
+      reset: (widgetId?: TurnstileWidgetId) => void
+    }
+  }
 }
 
 const navClass = ({ isActive }: { isActive: boolean }) =>
@@ -200,21 +211,91 @@ const institutionColorSchemes = {
 
 type InstitutionColorScheme = keyof typeof institutionColorSchemes
 
+function TurnstileWidget({
+  id,
+  resetSignal,
+  siteKey,
+  onTokenChange,
+}: {
+  id: string
+  resetSignal: number
+  siteKey: string
+  onTokenChange: (token: string) => void
+}) {
+  const containerRef = useRef<HTMLDivElement | null>(null)
+  const widgetIdRef = useRef<TurnstileWidgetId | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    const scriptId = 'quickglimpse-turnstile-script'
+    if (!document.getElementById(scriptId)) {
+      const script = document.createElement('script')
+      script.id = scriptId
+      script.src = 'https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit'
+      script.async = true
+      script.defer = true
+      document.head.appendChild(script)
+    }
+
+    const renderWidget = () => {
+      if (cancelled || widgetIdRef.current !== null || !window.turnstile || !containerRef.current) {
+        return Boolean(widgetIdRef.current)
+      }
+      widgetIdRef.current = window.turnstile.render(containerRef.current, {
+        sitekey: siteKey,
+        theme: 'light',
+        callback: (token) => onTokenChange(token),
+        'expired-callback': () => onTokenChange(''),
+        'error-callback': () => onTokenChange(''),
+      })
+      return true
+    }
+
+    const interval = window.setInterval(() => {
+      if (renderWidget()) {
+        window.clearInterval(interval)
+      }
+    }, 100)
+    renderWidget()
+
+    return () => {
+      cancelled = true
+      window.clearInterval(interval)
+      if (widgetIdRef.current !== null && window.turnstile) {
+        window.turnstile.remove(widgetIdRef.current)
+        widgetIdRef.current = null
+      }
+    }
+  }, [onTokenChange, siteKey])
+
+  useEffect(() => {
+    if (widgetIdRef.current !== null && window.turnstile) {
+      window.turnstile.reset(widgetIdRef.current)
+      onTokenChange('')
+    }
+  }, [onTokenChange, resetSignal])
+
+  return <div className="min-h-16" id={id} ref={containerRef} />
+}
+
 function App() {
   const [bootstrap, setBootstrap] = useState<BootstrapPayload | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [challenge, setChallenge] = useState<ChallengePreview | null>(null)
+  const [passwordResetMessage, setPasswordResetMessage] = useState<string | null>(null)
   const [savingSmtp, setSavingSmtp] = useState(false)
   const [authToken, setAuthToken] = useState('')
   const [sessionUser, setSessionUser] = useState<AuthUser | null>(null)
-  const [authUsers, setAuthUsers] = useState<AuthUser[]>([])
   const [rootOverview, setRootOverview] = useState<RootOverview | null>(null)
   const [smtpSettings, setSmtpSettings] = useState<SmtpSettings | null>(null)
   const [pendingTwoFa, setPendingTwoFa] = useState<TwoFaPending | null>(null)
   const [mustChangePw, setMustChangePw] = useState(false)
   const [institutionList, setInstitutionList] = useState<Institution[]>([])
   const [turnstileToken, setTurnstileToken] = useState('dev-turnstile-pass')
+  const [turnstileResetSignal, setTurnstileResetSignal] = useState(0)
+  const [interestTurnstileToken, setInterestTurnstileToken] = useState('dev-turnstile-pass')
+  const [interestTurnstileResetSignal, setInterestTurnstileResetSignal] = useState(0)
+  const [interestMessage, setInterestMessage] = useState<string | null>(null)
   const [smtpForm, setSmtpForm] = useState<SmtpFormState>({
     username: '',
     password: '',
@@ -251,6 +332,7 @@ function App() {
   const [crossTabData, setCrossTabData] = useState<Array<{ primaryAnswer: string; demoAnswer: string; count: number | '< 5' }> | null>(null)
   const kioskPromptQuestions = useMemo(() => kioskQuestions.filter((q) => !q.isDemographic), [kioskQuestions])
   const kioskDemographicQuestions = useMemo(() => kioskQuestions.filter((q) => q.isDemographic), [kioskQuestions])
+  const requiresTurnstileWidget = Boolean(bootstrap?.authCore.turnstileSiteKey && !bootstrap.authCore.devBypassTokenHint)
 
   useEffect(() => {
     const load = async () => {
@@ -260,6 +342,7 @@ function App() {
         const payload = (await response.json()) as BootstrapPayload
         setBootstrap(payload)
         setTurnstileToken(payload.authCore.devBypassTokenHint ?? '')
+        setInterestTurnstileToken(payload.authCore.devBypassTokenHint ?? '')
       } catch (caughtError) {
         setError(caughtError instanceof Error ? caughtError.message : 'Unknown error')
       } finally {
@@ -465,51 +548,57 @@ function App() {
     }
   }
 
-  const createChallenge = async (event: FormEvent<HTMLFormElement>) => {
+  const requestPasswordReset = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
     setError(null)
+    setPasswordResetMessage(null)
     try {
       const formData = new FormData(event.currentTarget)
       const email = String(formData.get('email') ?? '')
-      const method = String(formData.get('method') ?? 'email_code') as 'email_code' | 'magic_link'
-      const response = await fetch('/api/auth/challenges', {
+      const response = await fetch('/api/auth/password-reset/request', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, method }),
+        body: JSON.stringify({ email }),
       })
 
       if (!response.ok) {
-        throw new Error('Unable to create login challenge.')
+        throw new Error('Unable to request password reset.')
       }
 
-      setChallenge((await response.json()) as ChallengePreview)
+      setPasswordResetMessage('If the account exists, password reset instructions will be sent.')
+      event.currentTarget.reset()
     } catch (caughtError) {
-      setError(caughtError instanceof Error ? caughtError.message : 'Unable to create login challenge.')
+      setError(caughtError instanceof Error ? caughtError.message : 'Unable to request password reset.')
     }
   }
 
-  const registerAuthUser = async (event: FormEvent<HTMLFormElement>) => {
+  const submitInstitutionInterest = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
     setError(null)
-    const formData = new FormData(event.currentTarget)
-    const payload = {
-      email: String(formData.get('email') ?? ''),
-      password: String(formData.get('password') ?? ''),
-      role: String(formData.get('role') ?? 'institution_user'),
-      institutionId: formData.get('institutionId') ? Number(formData.get('institutionId')) : null,
-      turnstileToken,
-    }
-
-    const response = await fetch('/api/auth/register', {
+    setInterestMessage(null)
+    const form = event.currentTarget
+    const formData = new FormData(form)
+    const response = await fetch('/api/institution-interest', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
+      body: JSON.stringify({
+        institutionName: String(formData.get('institutionName') ?? ''),
+        contactName: String(formData.get('contactName') ?? ''),
+        email: String(formData.get('email') ?? ''),
+        notes: String(formData.get('notes') ?? ''),
+        turnstileToken: interestTurnstileToken,
+      }),
     })
 
     if (!response.ok) {
       const result = (await response.json()) as { error?: string }
-      throw new Error(result.error ?? 'Unable to register user.')
+      setInterestTurnstileResetSignal((current) => current + 1)
+      throw new Error(result.error ?? 'Unable to register interest.')
     }
+
+    setInterestMessage('Thank you. Your interest has been received.')
+    form.reset()
+    setInterestTurnstileResetSignal((current) => current + 1)
   }
 
   const loginAuthUser = async (event: FormEvent<HTMLFormElement>) => {
@@ -528,6 +617,7 @@ function App() {
 
     if (!response.ok) {
       const result = (await response.json()) as { error?: string }
+      setTurnstileResetSignal((current) => current + 1)
       throw new Error(result.error ?? 'Unable to login.')
     }
 
@@ -545,25 +635,6 @@ function App() {
     if (session.user.role === 'root') {
       await Promise.all([loadRootOverview(session.token), loadSmtpSettings(session.token), loadInstitutionList(session.token)])
     }
-  }
-
-  const logoutAuthUser = async () => {
-    if (!authToken) {
-      return
-    }
-
-    await fetch('/api/auth/logout', {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${authToken}` },
-    })
-    setAuthToken('')
-    setSessionUser(null)
-    setAuthUsers([])
-    setRootOverview(null)
-    setSmtpSettings(null)
-    setPendingTwoFa(null)
-    setMustChangePw(false)
-    setInstitutionList([])
   }
 
   const verify2FA = async (event: FormEvent<HTMLFormElement>) => {
@@ -664,48 +735,6 @@ function App() {
       throw new Error(result.error ?? 'Unable to delete institution.')
     }
     setInstitutionList((current) => current.filter((inst) => inst.id !== id))
-  }
-
-  const loadAuthUsers = async () => {
-    if (!authToken) {
-      setError('Administrator access is required to list users.')
-      return
-    }
-
-    const response = await fetch('/api/auth/users', {
-      headers: { Authorization: `Bearer ${authToken}` },
-    })
-    if (!response.ok) {
-      const result = (await response.json()) as { error?: string }
-      throw new Error(result.error ?? 'Unable to list users.')
-    }
-
-    const result = (await response.json()) as { users: AuthUser[] }
-    setAuthUsers(result.users)
-  }
-
-  const setUserStatus = async (id: number, status: AuthUser['status']) => {
-    if (!authToken) {
-      setError('Administrator access is required to update user status.')
-      return
-    }
-
-    const response = await fetch(`/api/auth/users/${id}/status`, {
-      method: 'PATCH',
-      headers: {
-        Authorization: `Bearer ${authToken}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({ status }),
-    })
-
-    if (!response.ok) {
-      const result = (await response.json()) as { error?: string }
-      throw new Error(result.error ?? 'Unable to update user status.')
-    }
-
-    const result = (await response.json()) as { user: AuthUser }
-    setAuthUsers((current) => current.map((item) => (item.id === result.user.id ? result.user : item)))
   }
 
   const loadInstitutionQuestions = async (institutionId: number, token: string) => {
@@ -978,7 +1007,6 @@ function App() {
             <>
               <NavLink className={navClass} to="/">Home</NavLink>
               <NavLink className={navClass} to="/auth-core">Sign in</NavLink>
-              <NavLink className={navClass} to="/kiosk">Kiosk preview</NavLink>
             </>
           ) : (
             <>
@@ -1003,56 +1031,95 @@ function App() {
       <main className="mx-auto grid max-w-6xl gap-6 px-4 py-8 md:px-6">
         {error ? <div className="rounded-2xl border border-amber-300 bg-amber-50 px-4 py-3 text-amber-900">{error}</div> : null}
         <Routes>
+          {!sessionUser ? (
+            <>
+              <Route path="/institutions" element={<Navigate to="/auth-core" replace />} />
+              <Route path="/kiosk" element={<Navigate to="/auth-core" replace />} />
+              <Route path="/root" element={<Navigate to="/auth-core" replace />} />
+              <Route path="/questions" element={<Navigate to="/auth-core" replace />} />
+              <Route path="/analytics" element={<Navigate to="/auth-core" replace />} />
+              <Route path="/profile" element={<Navigate to="/auth-core" replace />} />
+              <Route path="/smtp" element={<Navigate to="/auth-core" replace />} />
+            </>
+          ) : null}
           <Route
             path="/"
             element={
               !sessionUser ? (
-                <div className="grid gap-6">
-                  <section className="relative overflow-hidden rounded-3xl border border-[var(--brand-100)] bg-gradient-to-br from-[var(--brand-900)] via-[var(--brand-700)] to-[var(--brand-600)] p-8 text-white shadow-2xl shadow-[color:var(--brand-shadow)]">
-                    <p className="text-xs font-semibold uppercase tracking-[0.25em] text-white/80">Built for busy institutions</p>
-                    <h2 className="mt-3 max-w-3xl text-3xl font-semibold leading-tight md:text-4xl">
-                      Turn every in-person interaction into actionable service insight
-                    </h2>
-                    <p className="mt-4 max-w-2xl text-sm text-slate-100 md:text-base">
-                      As your growth partner, I’d position Quick Glimpse as the fastest path from frontline feedback to confident decisions across reception, outpatient, student services, retail counters, and community venues.
-                    </p>
-                    <div className="mt-6 flex flex-wrap gap-3">
-                      <NavLink className="rounded-full bg-white px-5 py-2.5 text-sm font-semibold text-[var(--brand-900)]" to="/auth-core">Register / sign in</NavLink>
-                      <NavLink className="rounded-full bg-white/15 px-5 py-2.5 text-sm font-semibold text-white ring-1 ring-white/40" to="/kiosk">See kiosk flow</NavLink>
-                    </div>
-                  </section>
-                  <section className="grid gap-4 lg:grid-cols-[1.2fr_0.8fr]">
-                    <article className={statCardClass}>
-                      <h3 className="text-lg font-semibold">Product in action: visitor kiosk journey</h3>
-                      <div className="mt-4 grid gap-3 text-sm">
-                        <div className="rounded-2xl border border-[var(--brand-100)] bg-[var(--brand-50)] px-4 py-3"><strong>Step 1:</strong> Welcome screen invites instant participation with one tap.</div>
-                        <div className="rounded-2xl border border-[var(--brand-100)] bg-white px-4 py-3"><strong>Step 2:</strong> Visitors answer guided prompts (rating, yes/no, multiple choice, text).</div>
-                        <div className="rounded-2xl border border-[var(--brand-100)] bg-white px-4 py-3"><strong>Step 3:</strong> Optional demographics add context without requiring personal identifiers.</div>
-                        <div className="rounded-2xl border border-[var(--brand-100)] bg-white px-4 py-3"><strong>Step 4:</strong> Dashboard trendlines and cross-tabs reveal where service improvements matter most.</div>
+                <div className="grid gap-8">
+                  <section className="grid gap-8 lg:grid-cols-[1.1fr_0.9fr] lg:items-center">
+                    <div className="py-4">
+                      <p className="text-xs font-semibold uppercase tracking-[0.2em] text-[var(--brand-700)]">Visitor feedback for institutions</p>
+                      <h2 className="mt-4 max-w-3xl text-4xl font-semibold leading-tight tracking-tight text-slate-950 md:text-5xl">
+                        Understand your visitors in the moment.
+                      </h2>
+                      <p className="mt-5 max-w-2xl text-lg leading-8 text-slate-700">
+                        Quick Glimpse is a lightweight web app that helps institutions collect simple feedback,
+                        understand their audience, and share useful information through tablets, kiosks, or QR-code links.
+                      </p>
+                      <div className="mt-7 flex flex-wrap items-center gap-3">
+                        <NavLink
+                          className="rounded-full bg-[var(--brand-700)] px-6 py-3 text-sm font-semibold text-white shadow-lg shadow-[color:var(--brand-shadow)]"
+                          to="/auth-core"
+                        >
+                          Sign in
+                        </NavLink>
                       </div>
-                    </article>
-                    <article className={statCardClass}>
-                      <h3 className="text-lg font-semibold">Institutional command centre</h3>
-                      <ul className="mt-4 space-y-3 text-sm text-slate-700">
-                        <li className="rounded-xl bg-slate-50 px-3 py-2">✅ Institution admins control kiosk mode and question rotation.</li>
-                        <li className="rounded-xl bg-slate-50 px-3 py-2">✅ Platform admins monitor aggregate platform health and rollout readiness.</li>
-                        <li className="rounded-xl bg-slate-50 px-3 py-2">✅ Secure sign-in with password + OTP/magic-link verification choices.</li>
-                        <li className="rounded-xl bg-slate-50 px-3 py-2">✅ Built-in SMTP configuration for enterprise email delivery workflows.</li>
-                      </ul>
-                    </article>
+                    </div>
+                    <form
+                      className="rounded-2xl border border-[var(--brand-100)] bg-white p-5 shadow-sm shadow-[color:var(--brand-shadow)]"
+                      onSubmit={(event) => void submitInstitutionInterest(event).catch((caughtError: unknown) => setError(caughtError instanceof Error ? caughtError.message : 'Interest registration failed.'))}
+                    >
+                      <h3 className="text-lg font-semibold text-slate-950">Register institutional interest</h3>
+                      <p className="mt-2 text-sm leading-6 text-slate-600">
+                        Leave a placeholder enquiry for a school, health service, venue, or public-facing team.
+                      </p>
+                      <div className="mt-5 grid gap-3">
+                        <input className="rounded-xl border border-slate-300 px-3 py-2" name="institutionName" placeholder="Institution name" required type="text" />
+                        <input className="rounded-xl border border-slate-300 px-3 py-2" name="contactName" placeholder="Contact name" required type="text" />
+                        <input className="rounded-xl border border-slate-300 px-3 py-2" name="email" placeholder="Email address" required type="email" />
+                        <textarea
+                          className="min-h-28 rounded-xl border border-slate-300 px-3 py-2"
+                          name="notes"
+                          placeholder="Where would you use Quick Glimpse?"
+                        />
+                        {requiresTurnstileWidget && bootstrap.authCore.turnstileSiteKey ? (
+                          <TurnstileWidget
+                            id="quickglimpse-interest-turnstile"
+                            resetSignal={interestTurnstileResetSignal}
+                            siteKey={bootstrap.authCore.turnstileSiteKey}
+                            onTokenChange={setInterestTurnstileToken}
+                          />
+                        ) : null}
+                        <button
+                          className="w-fit rounded-full bg-slate-900 px-5 py-2.5 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:bg-slate-300"
+                          disabled={requiresTurnstileWidget && !interestTurnstileToken}
+                          type="submit"
+                        >
+                          Register interest
+                        </button>
+                      </div>
+                      {interestMessage ? (
+                        <p className="mt-3 text-sm text-emerald-700">{interestMessage}</p>
+                      ) : null}
+                    </form>
                   </section>
-                  <section className="grid gap-4 md:grid-cols-3">
+                  <section className="grid gap-4 md:grid-cols-4">
                     <article className={statCardClass}>
-                      <h3 className="text-lg font-semibold">Public-facing confidence</h3>
-                      <p className="mt-2 text-sm text-slate-700">Modern landing, privacy-first messaging, and frictionless onboarding for new institutions.</p>
+                      <h3 className="text-base font-semibold">Ask short questions</h3>
+                      <p className="mt-2 text-sm leading-6 text-slate-700">Invite visitors to answer quick prompts while the experience is still fresh.</p>
                     </article>
                     <article className={statCardClass}>
-                      <h3 className="text-lg font-semibold">Admin-ready operations</h3>
-                      <p className="mt-2 text-sm text-slate-700">User lifecycle controls, institution management, and configurable colour schemes by institution.</p>
+                      <h3 className="text-base font-semibold">Use tablets or QR codes</h3>
+                      <p className="mt-2 text-sm leading-6 text-slate-700">Run it on a shared device or let people respond on their own phone.</p>
                     </article>
                     <article className={statCardClass}>
-                      <h3 className="text-lg font-semibold">Decision-grade analytics</h3>
-                      <p className="mt-2 text-sm text-slate-700">Daily response views plus demographic breakdowns and cross-tab insights with privacy safeguards.</p>
+                      <h3 className="text-base font-semibold">Share information</h3>
+                      <p className="mt-2 text-sm leading-6 text-slate-700">Give visitors useful guidance alongside the questions you need answered.</p>
+                    </article>
+                    <article className={statCardClass}>
+                      <h3 className="text-base font-semibold">See simple patterns</h3>
+                      <p className="mt-2 text-sm leading-6 text-slate-700">Help staff understand who is visiting and what people are telling them.</p>
                     </article>
                   </section>
                 </div>
@@ -1111,41 +1178,52 @@ function App() {
           <Route
             path="/auth-core"
             element={
-              <section className="grid gap-6">
-                <article className={statCardClass}>
-                  <h2 className="text-xl font-semibold">Secure account access</h2>
-                  <p className="mt-2 text-sm text-slate-600">
-                    Sign in with your account credentials and complete one-time verification when prompted.
+              <section className="mx-auto grid w-full max-w-5xl gap-8 py-4 lg:grid-cols-[0.9fr_1.1fr] lg:items-center lg:py-10">
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-[0.2em] text-[var(--brand-700)]">Account access</p>
+                  <h2 className="mt-4 text-4xl font-semibold leading-tight tracking-tight text-slate-950 md:text-5xl">
+                    Sign in to Quick Glimpse.
+                  </h2>
+                  <p className="mt-5 max-w-md text-base leading-7 text-slate-600">
+                    Use your institutional account to continue to the right workspace for your role.
                   </p>
-                </article>
-                <div className="grid gap-6 lg:grid-cols-2">
-                  {sessionUser ? (
-                    <article className={statCardClass}>
-                      <h2 className="text-xl font-semibold">Register user</h2>
-                      <form className="mt-4 grid gap-3" onSubmit={(event) => void registerAuthUser(event).catch((caughtError: unknown) => setError(caughtError instanceof Error ? caughtError.message : 'Registration failed.'))}>
-                        <input className="rounded-xl border border-slate-300 px-3 py-2" name="email" placeholder="new-user@example.com" required type="email" />
-                        <input className="rounded-xl border border-slate-300 px-3 py-2" name="password" placeholder="Password (min 10 chars)" required type="password" />
-                        <select className="rounded-xl border border-slate-300 px-3 py-2" name="role" defaultValue="institution_user">
-                          <option value="institution_user">institution_user</option>
-                          <option value="institution_admin">institution_admin</option>
-                        </select>
-                        <input className="rounded-xl border border-slate-300 px-3 py-2" name="institutionId" placeholder="Institution ID" defaultValue={bootstrap.institutions[0]?.id ?? ''} />
-                        <button className="w-fit rounded-full bg-slate-900 px-5 py-2.5 text-sm font-semibold text-white" type="submit">Register</button>
-                      </form>
-                    </article>
-                  ) : null}
-                  <article className={statCardClass}>
-                    <h2 className="text-xl font-semibold">Login + session</h2>
-                    <form className="mt-4 grid gap-3" onSubmit={(event) => void loginAuthUser(event).catch((caughtError: unknown) => setError(caughtError instanceof Error ? caughtError.message : 'Login failed.'))}>
-                      <input className="rounded-xl border border-slate-300 px-3 py-2" name="email" placeholder="you@example.com" required type="email" />
-                      <input className="rounded-xl border border-slate-300 px-3 py-2" name="password" placeholder="Password" required type="password" />
-                      <button className="w-fit rounded-full bg-sky-700 px-5 py-2.5 text-sm font-semibold text-white" type="submit">Login</button>
+                  <NavLink className="mt-7 inline-flex text-sm font-semibold text-[var(--brand-700)] underline underline-offset-4" to="/">
+                    Back to home
+                  </NavLink>
+                </div>
+                <article className="rounded-2xl border border-[var(--brand-100)] bg-white p-6 shadow-sm shadow-[color:var(--brand-shadow)]">
+                  <h3 className="text-xl font-semibold text-slate-950">Login</h3>
+                  <form className="mt-5 grid gap-3" onSubmit={(event) => void loginAuthUser(event).catch((caughtError: unknown) => setError(caughtError instanceof Error ? caughtError.message : 'Login failed.'))}>
+                    <input className="rounded-xl border border-slate-300 px-3 py-2" name="email" placeholder="Email address" required type="email" />
+                    <input className="rounded-xl border border-slate-300 px-3 py-2" name="password" placeholder="Password" required type="password" />
+                    {requiresTurnstileWidget && bootstrap.authCore.turnstileSiteKey ? (
+                      <TurnstileWidget
+                        id="quickglimpse-login-turnstile"
+                        resetSignal={turnstileResetSignal}
+                        siteKey={bootstrap.authCore.turnstileSiteKey}
+                        onTokenChange={setTurnstileToken}
+                      />
+                    ) : null}
+                    <button
+                      className="w-fit rounded-full bg-[var(--brand-700)] px-5 py-2.5 text-sm font-semibold text-white shadow-lg shadow-[color:var(--brand-shadow)] disabled:cursor-not-allowed disabled:bg-slate-300 disabled:shadow-none"
+                      disabled={requiresTurnstileWidget && !turnstileToken}
+                      type="submit"
+                    >
+                      Sign in
+                    </button>
+                  </form>
+                  <details className="mt-5 border-t border-slate-200 pt-5">
+                    <summary className="cursor-pointer text-sm font-semibold text-slate-700">Forgot password?</summary>
+                    <form className="mt-4 grid gap-3" onSubmit={(event) => void requestPasswordReset(event)}>
+                      <input className="rounded-xl border border-slate-300 px-3 py-2" name="email" placeholder="Email address" required type="email" />
+                      <button className="w-fit rounded-full bg-slate-900 px-5 py-2.5 text-sm font-semibold text-white" type="submit">
+                        Request reset
+                      </button>
                     </form>
-                    <div className="mt-4 flex flex-wrap gap-2">
-                      {sessionUser ? (
-                        <button className="rounded-full bg-slate-200 px-4 py-2 text-sm font-semibold" onClick={() => void logoutAuthUser().catch((caughtError: unknown) => setError(caughtError instanceof Error ? caughtError.message : 'Logout failed.'))} type="button">Logout</button>
-                      ) : null}
-                    </div>
+                    {passwordResetMessage ? (
+                      <p className="mt-3 text-sm text-emerald-700">{passwordResetMessage}</p>
+                    ) : null}
+                  </details>
                     {pendingTwoFa ? (
                       <div className="mt-4 rounded-xl border border-sky-200 bg-sky-50 px-4 py-4 text-sm">
                         <div className="font-semibold text-sky-900">2FA required</div>
@@ -1168,65 +1246,7 @@ function App() {
                         </form>
                       </div>
                     ) : null}
-                    <div className="mt-4 rounded-xl bg-slate-50 px-4 py-3 text-sm text-slate-700">
-                      <div className="font-medium text-slate-900">Current session</div>
-                      <div>{sessionUser ? `${sessionUser.email} (${sessionUser.role})` : 'No active session loaded'}</div>
-                    </div>
-                  </article>
-                </div>
-                <div className="grid gap-6 lg:grid-cols-2">
-                  {sessionUser?.role === 'root' ? (
-                    <article className={statCardClass}>
-                    <h2 className="text-xl font-semibold">Account lifecycle (administrator-only)</h2>
-                    <button className="mt-4 rounded-full bg-slate-900 px-4 py-2 text-sm font-semibold text-white" onClick={() => void loadAuthUsers().catch((caughtError: unknown) => setError(caughtError instanceof Error ? caughtError.message : 'Unable to load users.'))} type="button">
-                      Load users
-                    </button>
-                    <div className="mt-4 grid gap-2 text-sm">
-                      {authUsers.map((user) => (
-                        <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3" key={user.id}>
-                          <div className="font-medium text-slate-900">{user.email}</div>
-                          <div className="text-slate-600">{user.role} · {user.status}</div>
-                          <div className="mt-2 flex flex-wrap gap-2">
-                            {bootstrap.authCore.userStatuses.map((status) => (
-                              <button className="rounded-full bg-white px-3 py-1 text-xs font-semibold text-slate-700 ring-1 ring-slate-300" key={status} onClick={() => void setUserStatus(user.id, status).catch((caughtError: unknown) => setError(caughtError instanceof Error ? caughtError.message : 'Unable to update status.'))} type="button">
-                                {status}
-                              </button>
-                            ))}
-                            <button className="rounded-full bg-sky-100 px-3 py-1 text-xs font-semibold text-sky-700 ring-1 ring-sky-300" onClick={() => void toggle2FA(user.id, true).catch((err: unknown) => setError(err instanceof Error ? err.message : 'Failed.'))} type="button">2FA on</button>
-                            <button className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-700 ring-1 ring-slate-300" onClick={() => void toggle2FA(user.id, false).catch((err: unknown) => setError(err instanceof Error ? err.message : 'Failed.'))} type="button">2FA off</button>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                    </article>
-                  ) : null}
-                  {sessionUser ? (
-                    <article className={statCardClass}>
-                      <h2 className="text-xl font-semibold">Sign-in challenge preview</h2>
-                      <form className="mt-4 grid gap-3" onSubmit={(event) => void createChallenge(event)}>
-                        <input className="rounded-xl border border-slate-300 px-3 py-2" name="email" placeholder="visitor@example.com" required type="email" />
-                        <fieldset className="grid gap-2 text-sm">
-                          {bootstrap.authOptions.map((option, index) => (
-                            <label key={option.id} className="flex items-start gap-3 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
-                              <input defaultChecked={index === 0} name="method" type="radio" value={option.id} />
-                              <span>
-                                <span className="block font-medium text-slate-900">{option.label}</span>
-                                <span className="text-slate-600">{option.description}</span>
-                              </span>
-                            </label>
-                          ))}
-                        </fieldset>
-                        <button className="w-fit rounded-full bg-slate-900 px-5 py-2.5 text-sm font-semibold text-white" type="submit">Send challenge</button>
-                      </form>
-                      {challenge ? (
-                        <div className="mt-4 rounded-xl bg-slate-50 px-4 py-3 text-sm text-slate-700">
-                          <div className="font-medium text-slate-900">{challenge.method === 'magic_link' ? 'Magic link' : 'One-time code'} details</div>
-                          <div className="mt-2 break-all">{challenge.preview.magicLink ?? challenge.preview.otpCode}</div>
-                        </div>
-                      ) : null}
-                    </article>
-                  ) : null}
-                </div>
+                </article>
               </section>
             }
           />

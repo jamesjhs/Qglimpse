@@ -8,6 +8,10 @@ const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'quickglimpse-test-'))
 process.env.QUICKGLIMPSE_DB_PATH = path.join(tempDir, 'quickglimpse.db')
 process.env.QUICKGLIMPSE_DATA_DIR = tempDir
 process.env.QUICKGLIMPSE_BASE_URL = 'http://localhost:3000'
+process.env.TURNSTILE_SITE_KEY = ''
+process.env.TURNSTILE_SECRET_KEY = ''
+process.env.QUICKGLIMPSE_ROOT_SEED_PASSWORD = 'ChangeMeRoot123!'
+process.env.QUICKGLIMPSE_INSTITUTION_SEED_PASSWORD = 'ChangeMeInstitution123!'
 
 const services = await import('../dist/services.js')
 const { getDb } = await import('../dist/db.js')

@@ -52,6 +52,7 @@ Then open `http://localhost:3000`.
 - Confirmed demographics question bank seeded into template and institution copies
 - Platform overview metrics are aggregate-only and restricted to privileged sessions
 - SMTP settings are limited to the approved field set and restricted to privileged sessions
+- Cloudflare Turnstile support via `TURNSTILE_SITE_KEY` and `TURNSTILE_SECRET_KEY`
 - `/readyz` health endpoint, Docker baseline, and PM2 ecosystem file
 - Rate limiters bypass in dev-bypass mode
 
@@ -59,7 +60,7 @@ Then open `http://localhost:3000`.
 
 - Root/platform admin: `root@quickglimpse.local` / `ChangeMeRoot123!`
 - Institution admin: `institution-admin@quickglimpse.local` / `ChangeMeInstitution123!`
-- Turnstile dev bypass token: `dev-turnstile-pass`
+- Turnstile dev bypass token: `dev-turnstile-pass` when `TURNSTILE_SECRET_KEY` is empty
 
 ## Create initial platform admin via CLI
 

@@ -88,16 +88,6 @@ export async function verifyTurnstileToken(token: string, remoteIp?: string) {
     method: 'POST',
     headers: {
       'content-type': 'application/x-www-form-urlencoded',
-      ...(config.turnstile.cfAccessClientId
-        ? {
-            'CF-Access-Client-Id': config.turnstile.cfAccessClientId,
-          }
-        : {}),
-      ...(config.turnstile.cfAccessClientSecret
-        ? {
-            'CF-Access-Client-Secret': config.turnstile.cfAccessClientSecret,
-          }
-        : {}),
     },
     body: params,
   })

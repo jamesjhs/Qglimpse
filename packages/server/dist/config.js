@@ -56,8 +56,6 @@ export const config = {
         siteKey: process.env.TURNSTILE_SITE_KEY ?? '',
         secretKey: process.env.TURNSTILE_SECRET_KEY ?? '',
         devBypassToken: 'dev-turnstile-pass',
-        cfAccessClientId: requireEnv('CF-Access-Client-Id'),
-        cfAccessClientSecret: requireEnv('CF-Access-Client-Secret'),
     },
     seedCredentials: {
         rootPassword: requireEnv('QUICKGLIMPSE_ROOT_SEED_PASSWORD'),

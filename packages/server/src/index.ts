@@ -92,6 +92,14 @@ const loginSchema = z.object({
   turnstileToken: z.string().min(1),
 })
 
+const institutionInterestSchema = z.object({
+  institutionName: z.string().trim().min(1).max(160),
+  contactName: z.string().trim().min(1).max(120),
+  email: z.string().email(),
+  notes: z.string().trim().max(1000).default(''),
+  turnstileToken: z.string().min(1),
+})
+
 const updateUserStatusSchema = z.object({
   status: z.enum(userStatuses),
 })
@@ -333,7 +341,7 @@ export function createApp() {
     res.setHeader('permissions-policy', 'camera=(), microphone=(), geolocation=()')
     res.setHeader(
       'content-security-policy',
-      "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; font-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'",
+      "default-src 'self'; script-src 'self' https://challenges.cloudflare.com; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' https://challenges.cloudflare.com; frame-src 'self' https://challenges.cloudflare.com; child-src https://challenges.cloudflare.com; font-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'",
     )
     res.setHeader('strict-transport-security', 'max-age=31536000; includeSubDomains')
     res.setHeader('cross-origin-opener-policy', 'same-origin')
@@ -465,6 +473,20 @@ export function createApp() {
       requiresRemoteValidation: Boolean(config.turnstile.secretKey),
       devBypassTokenHint: config.turnstile.secretKey ? null : config.turnstile.devBypassToken,
     })
+  })
+
+  app.post('/api/institution-interest', authCoreLimiter, async (req, res) => {
+    const parsed = institutionInterestSchema.safeParse(req.body)
+    if (!parsed.success) {
+      return res.status(400).json({ error: 'Invalid interest registration payload.' })
+    }
+
+    const turnstileCheck = await verifyTurnstileToken(parsed.data.turnstileToken, req.ip)
+    if (!turnstileCheck.success) {
+      return res.status(400).json({ error: 'Turnstile verification failed.' })
+    }
+
+    return res.status(202).json({ accepted: true })
   })
 
   app.post('/api/auth/register', authCoreLimiter, async (req, res) => {
@@ -1121,10 +1143,27 @@ const isDirectRun =
   Boolean(process.argv[1]) && import.meta.url === pathToFileURL(process.argv[1] ?? '').href
 
 function parseAdminInitArgs(argv: string[]) {
-  const options: { email?: string; password?: string; mustChangePassword: boolean } = { mustChangePassword: true }
+  const npmEmail = process.env.npm_config_email
+  const npmPassword = process.env.npm_config_password
+  const options: { email?: string; password?: string; mustChangePassword: boolean } = {
+    email: npmEmail && !['true', 'false'].includes(npmEmail) ? npmEmail : undefined,
+    password: npmPassword && !['true', 'false'].includes(npmPassword) ? npmPassword : undefined,
+    mustChangePassword: process.env.npm_config_must_change_password
+      ? process.env.npm_config_must_change_password === 'true'
+      : true,
+  }
+  if (
+    process.env.npm_config_must_change_password &&
+    !['true', 'false'].includes(process.env.npm_config_must_change_password)
+  ) {
+    throw new Error('must-change-password must be true or false.')
+  }
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index]
     if (!arg.startsWith('--')) {
+      if (!options.email && arg.includes('@')) {
+        options.email = arg
+      }
       continue
     }
     const equalIndex = arg.indexOf('=')

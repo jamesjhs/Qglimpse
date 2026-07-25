@@ -7,8 +7,10 @@ import path from 'node:path'
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'quickglimpse-security-test-'))
 process.env.QUICKGLIMPSE_DB_PATH = path.join(tempDir, 'quickglimpse-security.db')
 process.env.QUICKGLIMPSE_DATA_DIR = tempDir
-process.env['CF-Access-Client-Id'] = 'test-client-id'
-process.env['CF-Access-Client-Secret'] = 'test-client-secret'
+process.env.TURNSTILE_SITE_KEY = ''
+process.env.TURNSTILE_SECRET_KEY = ''
+process.env.QUICKGLIMPSE_ROOT_SEED_PASSWORD = 'ChangeMeRoot123!'
+process.env.QUICKGLIMPSE_INSTITUTION_SEED_PASSWORD = 'ChangeMeInstitution123!'
 
 const { createApp } = await import('../dist/index.js')
 const services = await import('../dist/services.js')
@@ -68,6 +70,30 @@ test('password reset request response is consistent for existing and missing acc
   assert.equal(missing.response.status, 202)
   assert.deepEqual(existing.body, { accepted: true })
   assert.deepEqual(missing.body, { accepted: true })
+})
+
+test('institution interest endpoint requires a valid turnstile token', async () => {
+  const payload = {
+    institutionName: 'Example College',
+    contactName: 'Alex Contact',
+    email: 'alex@example.edu',
+    notes: 'Interested in visitor insight for reception areas.',
+  }
+
+  const missingToken = await api('/api/institution-interest', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ...payload, turnstileToken: '' }),
+  })
+  assert.equal(missingToken.response.status, 400)
+
+  const accepted = await api('/api/institution-interest', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ...payload, turnstileToken: 'dev-turnstile-pass' }),
+  })
+  assert.equal(accepted.response.status, 202)
+  assert.deepEqual(accepted.body, { accepted: true })
 })
 
 test('kiosk completion stores sanitized demographic data for prototype-pollution payloads', async () => {

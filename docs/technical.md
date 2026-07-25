@@ -188,7 +188,8 @@ All API routes are prefixed `/api/`. Authenticated routes require an `Authorizat
 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
-| `GET` | `/api/auth/turnstile` | None | Returns Turnstile site key and dev-bypass hint |
+| `GET` | `/api/auth/turnstile` | None | Returns Turnstile site key, remote-validation status, and local dev-bypass hint when no secret is configured |
+| `POST` | `/api/institution-interest` | None | Validates homepage institutional-interest submissions with Turnstile and returns `{ accepted: true }` |
 | `POST` | `/api/auth/register` | None | Register a new user (requires Turnstile token) |
 | `POST` | `/api/auth/login` | None | Log in; returns session token (requires Turnstile token) |
 | `GET` | `/api/auth/session` | Bearer | Validate session and return user info |
