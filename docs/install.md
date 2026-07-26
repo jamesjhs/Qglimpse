@@ -6,7 +6,6 @@
 |-------------|---------|-------|
 | Node.js | ≥ 22 recommended (≥ 20.18 minimum) | Install via [nvm](https://github.com/nvm-sh/nvm) or [nodejs.org](https://nodejs.org) |
 | npm | ≥ 10 | Bundled with Node 22 |
-| Docker + Docker Compose | Any recent version | Optional — only needed for container workflow |
 
 ## Environment variables
 
@@ -75,17 +74,6 @@ npm run admin:init -- --email admin@example.com --password 'ChangeMeNow123!'
 ```
 
 Optional: append `--must-change-password=false` if you do not want the first login to force a password change.
-
-## Docker workflow
-
-```bash
-# Build and start the container stack
-docker compose build
-docker compose up
-```
-
-Data persists in the named Docker volume `quickglimpse-data`.  
-See [docker-quickstart.md](docker-quickstart.md) for the full post-start verification steps.
 
 ## Development mode
 

@@ -139,6 +139,6 @@ Instead of a password, you can request a **magic link** from the login page. Cli
 
 ## Getting help
 
-For technical issues (server errors, email failures, Docker problems) refer to the [Troubleshooting guide](troubleshooting.md).
+For technical issues (server errors or email failures) refer to the [Troubleshooting guide](troubleshooting.md).
 
 For deployment and infrastructure questions refer to the [Installation guide](install.md) or [Production hardening](production-hardening.md).

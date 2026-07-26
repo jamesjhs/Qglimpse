@@ -20,8 +20,6 @@ quickglimpse/
 │           ├── App.tsx
 │           └── main.tsx
 ├── docs/                # This documentation
-├── Dockerfile
-├── docker-compose.yml
 └── ecosystem.config.cjs # PM2 process config
 ```
 

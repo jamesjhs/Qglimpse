@@ -4,7 +4,6 @@ Version: 0.3.1
 
 QGlimpse is a planned single-server, multi-institution PWA for anonymous visitor feedback. It is intended to let institutions run a logged-in guest kiosk, collect one carefully chosen feedback answer per visit when configured for single-question mode, optionally ask anonymous demographic questions, provide relevant immediate feedback to the submitting guest, and let authorised institution staff analyse and export the resulting data.
 
-The current repository is an early TypeScript/React/Express foundation. It must be treated as pre-production until the development phases below are complete. Historical development-mode shortcuts, preview tokens, Docker assumptions, placeholder legal text, and incomplete security controls must be removed before any live institutional deployment.
 
 ## Product and Design Brief
 
@@ -68,7 +67,6 @@ Known pre-production gaps:
 - XLSX export is not implemented.
 - 90-day retention is not enforced.
 - The PWA manifest exists, but service worker/cache update behaviour is not implemented.
-- Docker files and Docker documentation are historical artifacts and should be removed.
 
 ## Repository Layout
 

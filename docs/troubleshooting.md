@@ -154,22 +154,3 @@ npm start
 
 **Fix:** Request a new magic link via `POST /api/auth/challenges` with `{ "method": "magic_link" }`.
 
----
-
-## Docker issues
-
-### Container exits immediately
-
-**Cause:** The data volume is not writable, or the port is already bound on the host.
-
-**Fix:**
-```bash
-docker compose logs quickglimpse
-```
-Look for permission errors or `EADDRINUSE`. Adjust `ports:` in `docker-compose.yml` if needed.
-
-### Data lost after `docker compose down`
-
-**Cause:** `docker compose down -v` was used, which removes named volumes.
-
-**Fix:** Use `docker compose down` (without `-v`) to stop without removing data. Back up the `quickglimpse-data` volume before destructive operations.
