@@ -453,3 +453,4 @@ packages/web/dist/index.html
 !/packages/web/src/router.tsx
 /packages/web/dist/assets/
 package-lock.json
+/packages
