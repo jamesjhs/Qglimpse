@@ -16,6 +16,7 @@ Copy `.env.example` to `.env`, then set your own deployment values.
 |----------|-------------|
 | `PORT` | TCP port the server listens on |
 | `QUICKGLIMPSE_BASE_URL` | Canonical public URL — used in magic-link emails and redirects |
+| `QUICKGLIMPSE_TRUST_PROXY` | Express trusted proxy setting. Use `1` behind one trusted reverse proxy that sets `X-Forwarded-For`; leave `false` for direct/local use |
 | `QUICKGLIMPSE_DATA_DIR` | Directory where SQLite data files are stored |
 | `QUICKGLIMPSE_DB_PATH` | Full path to the SQLite database file |
 | `QUICKGLIMPSE_DB_ENCRYPTION_KEY` | Database encryption key value for deployment environments |

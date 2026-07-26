@@ -6,6 +6,7 @@ import { pathToFileURL } from 'node:url'
 import { z } from 'zod'
 import {
   authenticateSession,
+  changeRequiredPassword,
   changeOwnPassword,
   confirmPasswordReset,
   ensureInitialAdminLogin,
@@ -105,7 +106,7 @@ const updateUserStatusSchema = z.object({
 })
 
 const changePasswordSchema = z.object({
-  currentPassword: z.string().min(1),
+  currentPassword: z.string().min(1).optional(),
   newPassword: z.string().min(10),
 })
 
@@ -299,6 +300,7 @@ function getAuthenticatedSession(req: express.Request, res: express.Response) {
 export function createApp() {
   const app = express()
   app.disable('x-powered-by')
+  app.set('trust proxy', config.trustProxy)
   app.use(express.json({ limit: '50kb' }))
   app.use((req, res, next) => {
     const startedAt = Date.now()
@@ -686,12 +688,16 @@ export function createApp() {
     const parsed = changePasswordSchema.safeParse(req.body)
     if (!parsed.success) {
       return res.status(400).json({
-        error: 'Please enter your current password and a new password that is at least 10 characters long.',
+        error: 'Please enter a new password that is at least 10 characters long.',
       })
     }
 
     try {
-      changeOwnPassword(auth.session.user.id, parsed.data.currentPassword, parsed.data.newPassword)
+      if (parsed.data.currentPassword) {
+        changeOwnPassword(auth.session.user.id, parsed.data.currentPassword, parsed.data.newPassword)
+      } else {
+        changeRequiredPassword(auth.session.user.id, parsed.data.newPassword)
+      }
       return res.json({ success: true })
     } catch (error) {
       const msg = error instanceof Error ? error.message : 'Unable to change password.'

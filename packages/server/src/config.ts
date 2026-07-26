@@ -1,9 +1,8 @@
-import { existsSync, mkdirSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync } from 'node:fs'
 import path from 'node:path'
 
-const APP_VERSION = '0.3.0'
-
 const repoRoot = path.resolve(import.meta.dirname, '../../..')
+const packageJsonPath = path.join(repoRoot, 'package.json')
 const envPath = path.join(repoRoot, '.env')
 const envExamplePath = path.join(repoRoot, '.env.example')
 if (existsSync(envPath)) {
@@ -36,6 +35,31 @@ function requireSmtpSecureLoginType() {
   return value as 'none' | 'ssl' | 'starttls'
 }
 
+function readAppVersion() {
+  const packageJson = JSON.parse(readFileSync(packageJsonPath, 'utf8')) as { version?: unknown }
+  if (typeof packageJson.version !== 'string' || !packageJson.version.trim()) {
+    throw new Error('Root package.json must define a version.')
+  }
+  return packageJson.version.trim()
+}
+
+function parseTrustProxyEnv() {
+  const value = process.env.QUICKGLIMPSE_TRUST_PROXY?.trim()
+  if (!value || value === 'false') {
+    return false
+  }
+  if (value === 'true') {
+    return true
+  }
+
+  const proxyHopCount = Number(value)
+  if (Number.isInteger(proxyHopCount) && proxyHopCount >= 0) {
+    return proxyHopCount
+  }
+
+  throw new Error('Environment variable QUICKGLIMPSE_TRUST_PROXY must be false, true, or a non-negative integer.')
+}
+
 const dataDir = process.env.QUICKGLIMPSE_DATA_DIR
   ? path.resolve(process.env.QUICKGLIMPSE_DATA_DIR)
   : path.join(repoRoot, '.data')
@@ -44,9 +68,10 @@ mkdirSync(dataDir, { recursive: true })
 
 export const config = {
   appName: 'Quick Glimpse',
-  version: APP_VERSION,
+  version: readAppVersion(),
   port: requireIntegerEnv('PORT'),
   baseUrl: requireEnv('QUICKGLIMPSE_BASE_URL'),
+  trustProxy: parseTrustProxyEnv(),
   dataDir,
   databasePath: requireEnv('QUICKGLIMPSE_DB_PATH'),
   databaseEncryptionKey: requireEnv('QUICKGLIMPSE_DB_ENCRYPTION_KEY'),

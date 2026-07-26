@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import type { CSSProperties, FormEvent } from 'react'
+import type { CSSProperties, FormEvent, ReactNode } from 'react'
 import { Navigate, NavLink, Route, Routes, useSearchParams } from './router'
 
 type Institution = {
@@ -409,14 +409,6 @@ function App() {
     }
     return bootstrap.institutions[0]
   }, [bootstrap, sessionUser])
-  const localTime = useMemo(() => {
-    if (!selectedInstitution) return 'Unavailable'
-    return new Intl.DateTimeFormat(undefined, {
-      dateStyle: 'full',
-      timeStyle: 'short',
-      timeZone: selectedInstitution.timezone,
-    }).format(new Date())
-  }, [selectedInstitution])
   const activeColorScheme = (selectedInstitution?.colorScheme ?? 'ocean') as InstitutionColorScheme
   const appThemeStyle = useMemo(
     () =>
@@ -425,6 +417,40 @@ function App() {
       }) as CSSProperties,
     [activeColorScheme],
   )
+
+  const renderRequiredPasswordChange = () => (
+    <div className="min-h-screen bg-gradient-to-b from-[var(--brand-50)] via-white to-slate-50 px-4 py-10 text-slate-900 md:px-6" style={appThemeStyle}>
+      <main className="mx-auto grid min-h-[calc(100vh-5rem)] max-w-5xl items-center">
+        <section className="mx-auto grid w-full max-w-4xl gap-8 lg:grid-cols-[0.9fr_1.1fr] lg:items-center">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-[0.2em] text-[var(--brand-700)]">Account setup</p>
+            <h1 className="mt-4 text-4xl font-semibold leading-tight tracking-tight text-slate-950 md:text-5xl">
+              Set a new password.
+            </h1>
+            <p className="mt-5 max-w-md text-base leading-7 text-slate-600">
+              {sessionUser?.email} needs a password update before the workspace opens.
+            </p>
+          </div>
+          <article className="rounded-2xl border border-[var(--brand-100)] bg-white p-6 shadow-sm shadow-[color:var(--brand-shadow)]">
+            <h2 className="text-xl font-semibold text-slate-950">Password change required</h2>
+            <p className="mt-2 text-sm leading-6 text-slate-600">
+              Choose a new password with at least 10 characters.
+            </p>
+            <form className="mt-5 grid gap-3" onSubmit={(event) => void changePassword(event).catch((err: unknown) => setError(err instanceof Error ? err.message : 'Password change failed.'))}>
+              <PasswordInput autoComplete="new-password" name="newPassword" placeholder="New password (min 10 chars)" />
+              <PasswordInput autoComplete="new-password" name="confirmPassword" placeholder="Verify new password" />
+              <button className="w-fit rounded-full bg-[var(--brand-700)] px-5 py-2.5 text-sm font-semibold text-white shadow-lg shadow-[color:var(--brand-shadow)]" type="submit">
+                Update password
+              </button>
+            </form>
+            {error ? <p className="mt-4 rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">{error}</p> : null}
+          </article>
+        </section>
+      </main>
+    </div>
+  )
+
+  const requireSession = (element: ReactNode) => (sessionUser ? element : <Navigate to="/auth-core" replace />)
 
   const toggleKioskMode = async (institution: Institution) => {
     if (!authToken) {
@@ -714,12 +740,18 @@ function App() {
     if (!authToken) return
     setError(null)
     const formData = new FormData(event.currentTarget)
+    const currentPassword = String(formData.get('currentPassword') ?? '')
+    const newPassword = String(formData.get('newPassword') ?? '')
+    const confirmPassword = formData.has('confirmPassword') ? String(formData.get('confirmPassword') ?? '') : null
+    if (confirmPassword !== null && newPassword !== confirmPassword) {
+      throw new Error('New passwords do not match.')
+    }
     const response = await fetch('/api/auth/profile/password', {
       method: 'PATCH',
       headers: { Authorization: `Bearer ${authToken}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        currentPassword: String(formData.get('currentPassword') ?? ''),
-        newPassword: String(formData.get('newPassword') ?? ''),
+        ...(currentPassword ? { currentPassword } : {}),
+        newPassword,
       }),
     })
     if (!response.ok) {
@@ -1000,6 +1032,10 @@ function App() {
     return <div className="mx-auto flex min-h-screen max-w-6xl items-center justify-center px-6">{error ?? 'Bootstrap data unavailable.'}</div>
   }
 
+  if (sessionUser && mustChangePw) {
+    return renderRequiredPasswordChange()
+  }
+
   return (
     <Routes>
       <Route path="/kiosk" element={sessionUser ? <KioskFullScreen
@@ -1049,10 +1085,9 @@ function App() {
           ) : (
             <>
               <NavLink className={navClass} to="/">Overview</NavLink>
-              <NavLink className={navClass} to="/auth-core">Auth core</NavLink>
               <NavLink className={navClass} to="/profile">Profile</NavLink>
               <NavLink className={navClass} to="/institutions">Institutions</NavLink>
-              <NavLink className={navClass} to="/kiosk">Kiosk preview</NavLink>
+              <NavLink className={navClass} to="/kiosk">Kiosk</NavLink>
               <NavLink className={navClass} to="/questions">Questions</NavLink>
               <NavLink className={navClass} to="/analytics">Analytics</NavLink>
               {sessionUser.role === 'root' ? (
@@ -1069,17 +1104,6 @@ function App() {
       <main className="mx-auto grid max-w-6xl gap-6 px-4 py-8 md:px-6">
         {error ? <div className="rounded-2xl border border-amber-300 bg-amber-50 px-4 py-3 text-amber-900">{error}</div> : null}
         <Routes>
-          {!sessionUser ? (
-            <>
-              <Route path="/institutions" element={<Navigate to="/auth-core" replace />} />
-              <Route path="/kiosk" element={<Navigate to="/auth-core" replace />} />
-              <Route path="/root" element={<Navigate to="/auth-core" replace />} />
-              <Route path="/questions" element={<Navigate to="/auth-core" replace />} />
-              <Route path="/analytics" element={<Navigate to="/auth-core" replace />} />
-              <Route path="/profile" element={<Navigate to="/auth-core" replace />} />
-              <Route path="/smtp" element={<Navigate to="/auth-core" replace />} />
-            </>
-          ) : null}
           <Route
             path="/"
             element={
@@ -1216,7 +1240,10 @@ function App() {
           <Route
             path="/auth-core"
             element={
-              <section className="mx-auto grid w-full max-w-5xl gap-8 py-4 lg:grid-cols-[0.9fr_1.1fr] lg:items-center lg:py-10">
+              sessionUser ? (
+                <Navigate to="/" replace />
+              ) : (
+                <section className="mx-auto grid w-full max-w-5xl gap-8 py-4 lg:grid-cols-[0.9fr_1.1fr] lg:items-center lg:py-10">
                 <div>
                   <p className="text-xs font-semibold uppercase tracking-[0.2em] text-[var(--brand-700)]">Account access</p>
                   <h2 className="mt-4 text-4xl font-semibold leading-tight tracking-tight text-slate-950 md:text-5xl">
@@ -1273,24 +1300,14 @@ function App() {
                         </form>
                       </div>
                     ) : null}
-                    {mustChangePw ? (
-                      <div className="mt-4 rounded-xl border border-amber-300 bg-amber-50 px-4 py-4 text-sm">
-                        <div className="font-semibold text-amber-900">Password change required</div>
-                        <p className="mt-1 text-amber-700">Your account requires a password change before you can continue.</p>
-                        <form className="mt-3 grid gap-2" onSubmit={(event) => void changePassword(event).catch((err: unknown) => setError(err instanceof Error ? err.message : 'Password change failed.'))}>
-                          <PasswordInput autoComplete="current-password" name="currentPassword" placeholder="Current password" />
-                          <PasswordInput autoComplete="new-password" name="newPassword" placeholder="New password (min 10 chars)" />
-                          <button className="w-fit rounded-full bg-amber-700 px-4 py-2 text-sm font-semibold text-white" type="submit">Change password</button>
-                        </form>
-                      </div>
-                    ) : null}
                 </article>
               </section>
+              )
             }
           />
           <Route
             path="/institutions"
-            element={
+            element={requireSession(
               <section className="grid gap-6">
                 {sessionUser?.role === 'root' ? (
                   <article className={statCardClass}>
@@ -1351,54 +1368,12 @@ function App() {
                     </article>
                   ))}
                 </div>
-              </section>
-            }
-          />
-          <Route
-            path="/kiosk"
-            element={
-              <section className="grid gap-6 lg:grid-cols-[1.1fr_0.9fr]">
-                <article className={statCardClass}>
-                  <h2 className="text-xl font-semibold">Kiosk preview</h2>
-                  <p className="mt-2 text-sm text-slate-600">
-                    Use the full-screen kiosk at <code>/kiosk</code>. Below is a preview of kiosk status for the selected institution.
-                  </p>
-                  {selectedInstitution ? (
-                    <div className="mt-5 grid gap-3 text-sm text-slate-700">
-                      <div className="rounded-xl bg-slate-50 px-4 py-3">
-                        <div className="font-medium text-slate-900">Institution</div>
-                        <div>{selectedInstitution.name}</div>
-                      </div>
-                      <div className="rounded-xl bg-slate-50 px-4 py-3">
-                        <div className="font-medium text-slate-900">Kiosk mode</div>
-                        <div>{selectedInstitution.kioskModeEnabled ? 'Enabled' : 'Disabled'}</div>
-                      </div>
-                      <div className="rounded-xl bg-slate-50 px-4 py-3">
-                        <div className="font-medium text-slate-900">Current local time</div>
-                        <div>{localTime}</div>
-                      </div>
-                    </div>
-                  ) : null}
-                </article>
-                <article className={statCardClass}>
-                  <h2 className="text-xl font-semibold">Launch kiosk</h2>
-                  <div className="mt-4 rounded-2xl bg-slate-950 px-5 py-6 text-sm text-slate-200">
-                    <div className="font-semibold text-emerald-300">/kiosk</div>
-                    <p className="mt-2">Navigate to the kiosk route for the full-screen patient feedback experience.</p>
-                  </div>
-                  <a
-                    href="/kiosk"
-                    className="mt-4 inline-block rounded-full bg-[var(--brand-700)] px-5 py-2.5 text-sm font-semibold text-white shadow-lg shadow-[color:var(--brand-shadow)]"
-                  >
-                    Open full-screen kiosk
-                  </a>
-                </article>
-              </section>
-            }
+              </section>,
+            )}
           />
           <Route
             path="/root"
-            element={
+            element={requireSession(
               <section className="grid gap-6 lg:grid-cols-[1.1fr_0.9fr]">
                 <article className={statCardClass}>
                   <h2 className="text-xl font-semibold">Aggregate-only platform dashboard</h2>
@@ -1461,12 +1436,12 @@ function App() {
                     Administrative access sees high-level counts only. Trendlines disabled by requirement.
                   </p>
                 </article>
-              </section>
-            }
+              </section>,
+            )}
           />
           <Route
             path="/questions"
-            element={
+            element={requireSession(
               <section className="grid gap-6">
                 <div className="flex items-center justify-between">
                   <h2 className="text-xl font-semibold">Institution questions</h2>
@@ -1597,12 +1572,12 @@ function App() {
                     </article>
                   </>
                 )}
-              </section>
-            }
+              </section>,
+            )}
           />
           <Route
             path="/smtp"
-            element={
+            element={requireSession(
               <section className="grid gap-6 lg:grid-cols-[1.15fr_0.85fr]">
                 <article className={statCardClass}>
                   <h2 className="text-xl font-semibold">SMTP settings</h2>
@@ -1692,12 +1667,12 @@ function App() {
                     </div>
                   </dl>
                 </article>
-              </section>
-            }
+              </section>,
+            )}
           />
           <Route
             path="/analytics"
-            element={
+            element={requireSession(
               <section className="grid gap-6">
                 <article className={statCardClass}>
                   <div className="flex flex-wrap items-end justify-between gap-4">
@@ -1879,12 +1854,12 @@ function App() {
                     </div>
                   ) : null}
                 </article>
-              </section>
-            }
+              </section>,
+            )}
           />
           <Route
             path="/profile"
-            element={
+            element={requireSession(
               <section className="grid gap-6 lg:grid-cols-2">
                 <article className={statCardClass}>
                   <h2 className="text-xl font-semibold">Change password</h2>
@@ -1910,8 +1885,8 @@ function App() {
                     <p className="mt-3 text-sm text-amber-700">Login required.</p>
                   )}
                 </article>
-              </section>
-            }
+              </section>,
+            )}
           />
           <Route
             path="/help"

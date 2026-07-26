@@ -296,6 +296,16 @@ export function changeOwnPassword(userId, currentPassword, newPassword) {
     }
     db.prepare('UPDATE user_credentials SET password_hash = ?, must_change_password = 0, updated_at = CURRENT_TIMESTAMP WHERE user_id = ?').run(hashSync(newPassword, 12), userId);
 }
+export function changeRequiredPassword(userId, newPassword) {
+    const db = getDb();
+    const row = db
+        .prepare('SELECT must_change_password AS mustChangePassword FROM user_credentials WHERE user_id = ?')
+        .get(userId);
+    if (!row?.mustChangePassword) {
+        throw new Error('Current password is required.');
+    }
+    db.prepare('UPDATE user_credentials SET password_hash = ?, must_change_password = 0, updated_at = CURRENT_TIMESTAMP WHERE user_id = ?').run(hashSync(newPassword, 12), userId);
+}
 export function toggle2FA(targetUserId, enabled, requestingUser) {
     const db = getDb();
     const target = db.prepare('SELECT id FROM users WHERE id = ?').get(targetUserId);

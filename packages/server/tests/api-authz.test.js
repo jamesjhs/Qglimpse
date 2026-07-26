@@ -34,6 +34,13 @@ auth.registerUser({
   role: 'institution_user',
   institutionId: secondInstitutionId,
 })
+auth.registerUser({
+  email: 'locked-user@example.com',
+  password: 'TemporaryPassword123!',
+  role: 'institution_user',
+  institutionId: secondInstitutionId,
+  mustChangePassword: true,
+})
 
 const app = createApp()
 const server = app.listen(0)
@@ -106,8 +113,38 @@ test('password change validation returns a friendly warning', async () => {
   assert.equal(result.response.status, 400)
   assert.equal(
     result.body.error,
-    'Please enter your current password and a new password that is at least 10 characters long.',
+    'Please enter a new password that is at least 10 characters long.',
   )
+})
+
+test('required password change accepts a new password after login', async () => {
+  const lockedLogin = await api('/api/auth/login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      email: 'locked-user@example.com',
+      password: 'TemporaryPassword123!',
+      turnstileToken: 'dev-turnstile-pass',
+    }),
+  })
+  assert.equal(lockedLogin.response.status, 200)
+  assert.equal(lockedLogin.body.mustChangePassword, true)
+
+  const changed = await api('/api/auth/profile/password', {
+    method: 'PATCH',
+    headers: {
+      Authorization: `Bearer ${lockedLogin.body.token}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ newPassword: 'PermanentPassword123!' }),
+  })
+  assert.equal(changed.response.status, 200)
+
+  const session = auth.loginUser({
+    email: 'locked-user@example.com',
+    password: 'PermanentPassword123!',
+  })
+  assert.equal(session.mustChangePassword, false)
 })
 
 test('institution admin cannot access root-only routes', async () => {

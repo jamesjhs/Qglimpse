@@ -3,7 +3,7 @@
 Use this scaffold as a starting point, then complete the following before release:
 
 1. Put the app behind HTTPS and set `QUICKGLIMPSE_BASE_URL` to the canonical public URL.
-2. Terminate TLS at a reverse proxy and restrict the app to private network ingress where possible.
+2. Terminate TLS at a reverse proxy and restrict the app to private network ingress where possible. Set `QUICKGLIMPSE_TRUST_PROXY=1` when there is one trusted proxy hop setting `X-Forwarded-For`.
 3. Replace the login preview flow with real email delivery and verification before enabling external users.
 4. Store SMTP credentials in a secret manager or injected environment variables, not in source control.
 5. Back up the SQLite data directory and monitor `/readyz` from your orchestration platform.

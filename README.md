@@ -1,6 +1,6 @@
 # quickglimpse
 
-Quick Glimpse is a Docker-contained PWA for institution-specific visitor insight collection. v0.3.0 covers the full feature set from auth core through kiosk runtime, analytics, SMTP integration, and CLI-based initial admin setup.
+Quick Glimpse is a Docker-contained PWA for institution-specific visitor insight collection. v0.3.1 covers the full feature set from auth core through kiosk runtime, analytics, SMTP integration, and CLI-based initial admin setup.
 
 Copy `.env.example` to `.env` and set your own values before first run.
 

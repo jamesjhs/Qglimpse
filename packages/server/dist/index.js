@@ -4,7 +4,7 @@ import path from 'node:path';
 import { existsSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import { z } from 'zod';
-import { authenticateSession, changeOwnPassword, confirmPasswordReset, ensureInitialAdminLogin, ensureSeedCredentials, listUsers, loginUser, logoutSession, registerUser, toggle2FA, updateUserEmail, updateUserStatus, userRoles, userStatuses, verifyMagicLinkChallenge, verifyOtpChallenge, verifyTurnstileToken, } from './auth.js';
+import { authenticateSession, changeRequiredPassword, changeOwnPassword, confirmPasswordReset, ensureInitialAdminLogin, ensureSeedCredentials, listUsers, loginUser, logoutSession, registerUser, toggle2FA, updateUserEmail, updateUserStatus, userRoles, userStatuses, verifyMagicLinkChallenge, verifyOtpChallenge, verifyTurnstileToken, } from './auth.js';
 import { buildBootstrapPayload, confirmEmailVerification, createCustomQuestion, createInstitution, createInstitutionUser, createLoginChallenge, deleteCustomQuestion, deleteInstitution, getInstitution, getInstitutionAnalytics, getInstitutionQuestions, getCrossTabulation, getKioskStatus, getRootOverview, getSmtpSettings, listInstitutions, listInstitutionUsers, listQuestionTemplates, requestEmailVerification, requestPasswordReset, sendTestSmtpEmail, setInstitutionColorScheme, startKioskSession, submitKioskAnswer, completeKioskSession, toggleInstitutionKioskMode, updateInstitution, updateInstitutionQuestion, updateSmtpSettings, } from './services.js';
 import { config } from './config.js';
 import { getDb } from './db.js';
@@ -48,7 +48,7 @@ const updateUserStatusSchema = z.object({
     status: z.enum(userStatuses),
 });
 const changePasswordSchema = z.object({
-    currentPassword: z.string().min(1),
+    currentPassword: z.string().min(1).optional(),
     newPassword: z.string().min(10),
 });
 const passwordResetRequestSchema = z.object({
@@ -210,6 +210,7 @@ function getAuthenticatedSession(req, res) {
 export function createApp() {
     const app = express();
     app.disable('x-powered-by');
+    app.set('trust proxy', config.trustProxy);
     app.use(express.json({ limit: '50kb' }));
     app.use((req, res, next) => {
         const startedAt = Date.now();
@@ -544,11 +545,16 @@ export function createApp() {
         const parsed = changePasswordSchema.safeParse(req.body);
         if (!parsed.success) {
             return res.status(400).json({
-                error: 'Please enter your current password and a new password that is at least 10 characters long.',
+                error: 'Please enter a new password that is at least 10 characters long.',
             });
         }
         try {
-            changeOwnPassword(auth.session.user.id, parsed.data.currentPassword, parsed.data.newPassword);
+            if (parsed.data.currentPassword) {
+                changeOwnPassword(auth.session.user.id, parsed.data.currentPassword, parsed.data.newPassword);
+            }
+            else {
+                changeRequiredPassword(auth.session.user.id, parsed.data.newPassword);
+            }
             return res.json({ success: true });
         }
         catch (error) {
