@@ -1,33 +1,88 @@
-# quickglimpse
+# QGlimpse
 
-Quick Glimpse is a Docker-contained PWA for institution-specific visitor insight collection. v0.3.1 covers the full feature set from auth core through kiosk runtime, analytics, SMTP integration, and CLI-based initial admin setup.
+Version: 0.3.1
 
-Copy `.env.example` to `.env` and set your own values before first run.
+QGlimpse is a planned single-server, multi-institution PWA for anonymous visitor feedback. It is intended to let institutions run a logged-in guest kiosk, collect one carefully chosen feedback answer per visit when configured for single-question mode, optionally ask anonymous demographic questions, provide relevant immediate feedback to the submitting guest, and let authorised institution staff analyse and export the resulting data.
 
-## Features
+The current repository is an early TypeScript/React/Express foundation. It must be treated as pre-production until the development phases below are complete. Historical development-mode shortcuts, preview tokens, Docker assumptions, placeholder legal text, and incomplete security controls must be removed before any live institutional deployment.
 
-- **Multi-institution support** — create, manage, and isolate multiple institutions under a single administrative account
-- **Full authentication** — email/password login, email 2FA, magic-link sign-in, password reset, email verification
-- **Question bank management** — global template library cloned per institution; custom questions; scheduling by day and time window
-- **Kiosk runtime** — per-institution kiosk mode with session tracking, answer submission, and demographic capture at completion
-- **Analytics with cross-tabulation** — per-institution response summaries with demographic breakdown
-- **SMTP with test email** — runtime SMTP configuration stored in the database; test-email endpoint for validation
-- **Docker support** — single-container image with named volume persistence and a docker-compose workflow
+## Product and Design Brief
 
-## Repository layout
+QGlimpse exists for institutions that need fast, low-friction, anonymous feedback from visitors, patients, students, service users, or guests. The product should avoid long survey fatigue by centring the kiosk around one active question. An institution may choose to keep the same question live continuously, change it manually, change it for a user group, or rotate it on a schedule. Demographic questions may be used only as optional anonymous context and must never turn the kiosk into an identifiable survey.
 
-- `packages/web` — React + Vite + Tailwind PWA shell
-- `packages/server` — Express API, SQLite, auth, seed data
-- `docs/install.md` — prerequisites, environment variables, first-run steps
-- `docs/troubleshooting.md` — common issues and fixes
-- `docs/technical.md` — architecture, schema, API reference, rate limiting, security headers
-- `docs/simple-guide.md` — plain-English guide for non-technical staff
-- `docs/privacy-policy.md` — privacy policy baseline for deployments
-- `docs/dpia.md` — DPIA summary and control mapping
-- `docs/docker-quickstart.md` — local container workflow
-- `docs/production-hardening.md` — deployment hardening checklist
+The main homepage is a public landing page for institutions considering QGlimpse. The same app also provides a single login route for every staff-facing and kiosk-facing role. After login, users are routed by role and institution scope.
 
-## Quick start
+Required roles:
+
+- **Root user**: controls all institutional accounts, all institution users, global templates, core institution-specific questions, core demographic question templates, platform settings, and retention/compliance controls.
+- **Institution admin**: controls their own institution's users, analytics, question bank, guest kiosk appearance, kiosk mode, and institution-level settings.
+- **Institution general user**: controls their own institution's question bank and analytics, subject to permissions configured by their institution.
+- **Institution kiosk user**: signs into a kiosk-only account and sees only the guest-facing kiosk. This role may display a single-use QR code that opens the same anonymous guest submission flow on another device.
+
+Required feedback model:
+
+- Feedback is anonymous-only.
+- QGlimpse is built for multiple institutions on one server, with strict data isolation.
+- Kiosk access is login-based, not a fully public kiosk-by-slug surface.
+- A logged-in kiosk may optionally display a single-use QR code for guest device submission.
+- If an institution chooses single-question mode, each guest session must present exactly one active non-demographic feedback question.
+- Optional demographic prompts may follow, but must stay anonymous and skippable.
+- Guest-facing completion may show relevant feedback, signposting, or service information based on the submitted answer where configured.
+- No VAPID push notification technology is required.
+
+Required technical direction:
+
+- TypeScript throughout the application code.
+- React front end.
+- Express or equivalent Node server back end.
+- `.env` configuration.
+- PM2 runtime via `ecosystem.config.cjs`.
+- Cloudflare Tunnel exposure to the URL defined by `QUICKGLIMPSE_BASE_URL`.
+- Cloudflare Turnstile on login and other exposed form flows.
+- Optional email 2FA for every account via real SMTP delivery.
+- SQLiteCipher-backed encrypted database storage.
+- Installable PWA shell with a valid app manifest.
+- PWA cache/version handling must ensure version changes immediately refresh local cached assets.
+- Export support for XLSX raw data and aggregate analytics.
+- Default data retention: 90 days.
+
+Non-goals:
+
+- Docker is not part of the target deployment.
+- Public unauthenticated kiosk mode is not the default target.
+- Push notifications are not required.
+- Development-mode, preview-mode, demo-token, or placeholder security paths must not exist in production code.
+
+## Current Repository Snapshot
+
+Current implementation includes a React/Vite web app, an Express API, PM2 config, basic role-based auth, seeded institutions/questions, Turnstile integration points, SMTP settings, kiosk session APIs, analytics summaries, and documentation drafts.
+
+Known pre-production gaps:
+
+- The configured database encryption key is not currently applied to the database connection.
+- Kiosk UI routing is staff-session based and does not yet model a kiosk-only role or single-use QR submission.
+- 2FA and magic-link flows contain preview/development behaviour and must be replaced with real SMTP delivery.
+- Password reset and email verification flows are incomplete until real token delivery is implemented.
+- Institution general users do not yet have the intended question-bank permissions.
+- Single-question mode is not enforced as a product invariant.
+- XLSX export is not implemented.
+- 90-day retention is not enforced.
+- The PWA manifest exists, but service worker/cache update behaviour is not implemented.
+- Docker files and Docker documentation are historical artifacts and should be removed.
+
+## Repository Layout
+
+- `packages/web` - React + Vite PWA shell.
+- `packages/server` - Express API, auth, data access, and application services.
+- `docs/install.md` - installation and environment notes.
+- `docs/troubleshooting.md` - common issues and fixes.
+- `docs/technical.md` - technical notes and API reference.
+- `docs/simple-guide.md` - plain-English staff guide.
+- `docs/privacy-policy.md` - deployment privacy policy draft.
+- `docs/dpia.md` - DPIA summary draft.
+- `docs/production-hardening.md` - historical hardening checklist that must be superseded by the phases below.
+
+## Local Build and Run
 
 ```bash
 npm install
@@ -37,91 +92,266 @@ npm start
 
 Then open `http://localhost:3000`.
 
-## Included foundation capabilities
-
-- Email 2FA: OTP challenge issued on login when enabled; `/api/auth/challenges/verify` issues the session
-- Magic link: server generates a token, SPA handles `/magic-link?token=` after redirect from `/auth/magic-link`
-- Password reset: `POST /api/auth/password-reset/request` (returns dev preview token) + `POST /api/auth/password-reset/confirm`
-- Email verification: `POST /api/auth/email-verify/request` + `POST /api/auth/email-verify/confirm`
-- Delegated user creation: institution admins can `POST /api/institutions/:id/users` (users created with `mustChangePassword: true`)
-- Institution CRUD: restricted administrative access for `GET/POST /api/institutions`, `GET/PUT/DELETE /api/institutions/:id`; delete blocked if users assigned
-- Profile management: `PATCH /api/auth/profile` (email), `PATCH /api/auth/profile/password` (change own password)
-- Auth core with registration/login, session issuance + validation + logout, and account status lifecycle updates
-- `mustChangePassword` returned in login response; 2FA toggle via `PATCH /api/auth/users/:id/2fa`
-- Institution kiosk-mode toggle persisted in SQLite with institution-scoped admin authorization
-- Confirmed demographics question bank seeded into template and institution copies
-- Platform overview metrics are aggregate-only and restricted to privileged sessions
-- SMTP settings are limited to the approved field set and restricted to privileged sessions
-- Cloudflare Turnstile support via `TURNSTILE_SITE_KEY` and `TURNSTILE_SECRET_KEY`
-- `/readyz` health endpoint, Docker baseline, and PM2 ecosystem file
-- Rate limiters bypass in dev-bypass mode
-
-## Auth seed accounts (local defaults)
-
-- Root/platform admin: `root@quickglimpse.local` / `ChangeMeRoot123!`
-- Institution admin: `institution-admin@quickglimpse.local` / `ChangeMeInstitution123!`
-- Turnstile dev bypass token: `dev-turnstile-pass` when `TURNSTILE_SECRET_KEY` is empty
-
-## Create initial platform admin via CLI
+## PM2 Runtime
 
 ```bash
-npm run admin:init -- --email admin@example.com --password 'ChangeMeNow123!'
+npm install
+npm run build
+pm2 start ecosystem.config.cjs
 ```
 
-Optional: append `--must-change-password=false` if you do not want the first login to force a password change.
+The PM2 ecosystem starts the production server from `packages/server/dist/index.js` and loads environment variables from `.env`.
 
-## User-facing workflow
+Required deployment configuration must include:
 
-1. Sign in via **Auth core** with email + password.
-2. If 2FA is enabled, enter the OTP code in the challenge form.
-3. If `mustChangePassword` is true, a banner prompts the user to change their password immediately.
-4. Manage 2FA and change password from the **Profile** tab.
-5. Follow a magic link — the server redirects to `/magic-link?token=…` which logs you in automatically.
+- `PORT`
+- `QUICKGLIMPSE_BASE_URL`
+- `QUICKGLIMPSE_TRUST_PROXY`
+- `QUICKGLIMPSE_DATA_DIR`
+- `QUICKGLIMPSE_DB_PATH`
+- `QUICKGLIMPSE_DB_ENCRYPTION_KEY`
+- `QUICKGLIMPSE_SESSION_TTL_MS`
+- `TURNSTILE_SITE_KEY`
+- `TURNSTILE_SECRET_KEY`
+- SMTP host, port, username, password, sender address, and secure login mode
 
-## Admin workflows
+Production startup must fail closed if required security settings are absent.
 
-### Institution admin
-- Can sign in and manage kiosk mode **only for their own institution**.
-- Can create users via `POST /api/institutions/:id/users` (own institution only).
-- Can list users in their institution via `GET /api/institutions/:id/users`.
+## Security and Compliance Gate
 
-### Platform admin
-- Can access aggregate-only platform overview metrics.
-- Can list all users, update user lifecycle status and toggle 2FA.
-- Can read/update SMTP settings.
-- Full institution CRUD: create, rename, delete (blocked if users assigned).
+This section is normative. A QGlimpse release is not production-ready until all items here are true.
 
-## API summary
+Hard blockers:
 
-See [docs/technical.md](docs/technical.md) for the full API reference. Key route groups:
+- No development bypass tokens, preview OTPs, preview magic links, seeded live credentials, placeholder reset flows, or fake delivery paths remain.
+- SQLiteCipher is active and verified by opening the database only with the configured encryption key.
+- SMTP-backed 2FA, password reset, email verification, and magic-link delivery work end to end.
+- Cloudflare Turnstile is required and verified server-side for login and exposed anonymous/public form flows.
+- Kiosk sessions use expiring, single-purpose tokens; QR submission tokens are single-use and short-lived.
+- Every authenticated route enforces role and institution scope.
+- Every kiosk answer is validated against the active session, institution, question, type, and allowed options.
+- Logs exclude passwords, tokens, OTPs, raw free-text answers, demographic payloads, and SMTP secrets.
+- Data retention is enforced at 90 days by default for feedback responses, kiosk sessions, and derived analytics inputs unless a stricter institution policy is configured.
+- XLSX exports are permissioned, audited, institution-scoped, and generated without leaking other institutions' data.
+- PWA cache updates are tied to application version changes and old cached assets are purged immediately after activation.
+- Privacy policy, DPIA, retention policy, and processor/subprocessor documentation match shipped behaviour.
 
-| Method | Path | Access |
-|--------|------|--------|
-| `POST` | `/api/auth/challenges` | Public |
-| `POST` | `/api/auth/challenges/verify` | Public |
-| `GET` | `/api/auth/magic-link?token=` | Public |
-| `POST` | `/api/auth/password-reset/request` | Public |
-| `POST` | `/api/auth/password-reset/confirm` | Public |
-| `POST` | `/api/auth/email-verify/request` | Authenticated |
-| `POST` | `/api/auth/email-verify/confirm` | Public |
-| `PATCH` | `/api/auth/users/:id/2fa` | Self or platform admin |
-| `PATCH` | `/api/auth/profile` | Authenticated |
-| `PATCH` | `/api/auth/profile/password` | Authenticated |
-| `GET/POST` | `/api/institutions` | Platform admin |
-| `GET/PUT/DELETE` | `/api/institutions/:id` | Platform admin |
-| `POST` | `/api/institutions/:id/color-scheme` | Platform admin or inst. admin (own) |
-| `GET` | `/api/institutions/:id/users` | Platform admin or institution_admin (own) |
-| `POST` | `/api/institutions/:id/users` | Platform admin or institution_admin (own) |
-| `GET/POST/PATCH/DELETE` | `/api/institutions/:id/questions` | Platform admin or institution_admin (own) |
-| `GET` | `/api/institutions/:id/analytics` | Platform admin or institution user (own) |
-| `GET` | `/api/institutions/:id/analytics/cross-tab` | Platform admin or institution user (own) |
-| `GET` | `/api/kiosk/:slug/status` | Public |
-| `POST` | `/api/kiosk/:slug/session` | Public |
-| `POST` | `/api/kiosk/answer` | Public |
-| `POST` | `/api/kiosk/complete` | Public |
-| `GET/PUT` | `/api/settings/smtp` | Platform admin |
-| `POST` | `/api/settings/smtp/test` | Platform admin |
-| `GET` | `/api/question-templates` | Authenticated |
+GDPR and data protection requirements:
+
+- QGlimpse must process guest feedback anonymously only.
+- The platform must maintain strict separation between account data and anonymous feedback data.
+- Institutions must be treated as separate data domains within the same server.
+- Demographic questions must be optional, skippable, category-based where possible, and reviewed for re-identification risk.
+- Analytics must suppress or aggregate small cohorts where re-identification is plausible.
+- Admin actions affecting users, exports, questions, kiosk settings, retention, and SMTP settings must be auditable.
+- Institution-level export and deletion workflows must be documented and tested.
+- Backups must be encrypted and follow the same retention and access-control model.
+
+## Development Phases
+
+### Phase 0: Product Reset and Scope Lock
+
+Goal: remove hallucinated assumptions and make the intended product contract explicit.
+
+Work:
+
+- Remove Docker as a target deployment path from code, docs, and scripts.
+- Replace "Quick Glimpse" and "QGlimpse" naming inconsistencies with the final product name.
+- Define the four roles and their exact permissions.
+- Decide the exact URL structure for homepage, login, staff app, kiosk login, and QR guest submission.
+- Define anonymous-only data categories and banned fields.
+- Define the 90-day retention policy and backup retention expectations.
+- Define the institution onboarding process and root-admin responsibilities.
+
+Exit criteria:
+
+- README, technical docs, environment docs, and visible app language describe the same product.
+- No docs claim completed production functionality that is not implemented.
+- The repo has no Docker deployment instructions or Docker artifacts.
+
+### Phase 1: Production Configuration and Encrypted Persistence
+
+Goal: make the server fail closed and protect data at rest.
+
+Work:
+
+- Replace plain SQLite with SQLiteCipher-backed storage.
+- Apply and verify `QUICKGLIMPSE_DB_ENCRYPTION_KEY` during database open.
+- Add startup checks for production-required `.env` values.
+- Remove fallback loading from `.env.example` for production paths.
+- Remove seeded live accounts from normal startup.
+- Keep an explicit first-root-admin CLI flow that never logs secrets.
+- Add schema migrations with version tracking.
+- Add encrypted backup and restore documentation.
+
+Exit criteria:
+
+- The database cannot be opened without the configured encryption key.
+- Production startup fails if Turnstile, SMTP, base URL, trust proxy, session secret material, or DB encryption settings are unsafe.
+- A clean install can create the first root account without demo credentials.
+
+### Phase 2: Authentication, 2FA, and Account Lifecycle
+
+Goal: replace preview-mode auth with real account security.
+
+Work:
+
+- Implement real SMTP delivery for OTP, magic link, password reset, and email verification.
+- Remove all OTP/token preview responses from API and UI.
+- Add optional email 2FA for all roles.
+- Add role-aware login routing.
+- Add kiosk-only account support.
+- Add session rotation, expiry, revocation, and idle-timeout behaviour.
+- Add brute-force protections that do not break normal kiosk operation.
+- Add audit records for login, logout, failed login, password reset, 2FA changes, account status changes, and privileged admin actions.
+
+Exit criteria:
+
+- No authentication flow depends on a development token or preview value.
+- Every role can sign in and lands only in the correct surface.
+- Suspended/deactivated users and revoked sessions cannot continue using the app.
+
+### Phase 3: Institution and User Administration
+
+Goal: make multi-institution management safe and complete.
+
+Work:
+
+- Implement root management for all institutions and institution users.
+- Implement institution-admin management for only their own institution.
+- Implement institution-general-user permissions for question bank and analytics.
+- Add institution settings for timezone, branding, kiosk appearance, single-question mode, QR mode, and retention overrides.
+- Add safe institution deletion/deactivation flows.
+- Add admin audit trails for institution, user, permission, and settings changes.
+
+Exit criteria:
+
+- Cross-institution access is covered by automated tests.
+- Institution admins cannot inspect or mutate other institutions.
+- Institution general users can manage only the intended question and analytics surfaces.
+
+### Phase 4: Question Bank and Scheduling
+
+Goal: make QGlimpse's single-question feedback method the core product behaviour.
+
+Work:
+
+- Separate core root-managed templates, institution templates, demographic templates, and live kiosk assignments.
+- Implement single-question mode: exactly one active non-demographic question per guest session.
+- Implement continuous, manual, user-targeted, and scheduled question selection.
+- Validate question type, options, schedule windows, and institution ownership.
+- Keep demographic questions optional and independently configurable.
+- Add question versioning so historical analytics retain the prompt shown at submission time.
+
+Exit criteria:
+
+- In single-question mode, a kiosk session cannot present multiple non-demographic questions.
+- Staff can schedule or change the live question without corrupting historical analytics.
+- Demographic prompts are skippable and never required for feedback submission.
+
+### Phase 5: Kiosk Runtime and Single-Use QR
+
+Goal: build the real guest-facing collection surface.
+
+Work:
+
+- Add kiosk-only login and kiosk-only route access.
+- Prevent kiosk users from reaching staff dashboards.
+- Build an installable kiosk PWA shell suitable for tablets.
+- Add optional single-use QR code display for guest-device submission.
+- Make QR tokens short-lived, single-use, institution-scoped, and bound to the active kiosk configuration.
+- Add answer validation for type, option set, institution, active question, session status, and token expiry.
+- Add configured immediate guest feedback after submission.
+- Add idle reset, failed-submission recovery, and clear offline/unavailable states.
+
+Exit criteria:
+
+- A kiosk account can run the guest kiosk and nothing else.
+- A guest can submit anonymously through the kiosk or a valid single-use QR code.
+- Expired, reused, forged, or cross-institution QR/session tokens fail safely.
+
+### Phase 6: Analytics, Exports, and Retention
+
+Goal: provide useful institution insight without leaking personal or cross-institution data.
+
+Work:
+
+- Build analytics for raw counts, trends, question performance, scheduled-question comparisons, and demographic aggregate views.
+- Add small-cohort suppression for demographic breakdowns and cross-tabs.
+- Implement XLSX raw-data export.
+- Implement XLSX aggregate export.
+- Add export audit logs.
+- Add configurable date filters within retention limits.
+- Enforce 90-day default retention for raw responses and sessions.
+- Decide whether aggregate summaries survive raw-data deletion and document the choice.
+
+Exit criteria:
+
+- Institution users can export only their own institution's allowed data.
+- Root users can export platform/institution data according to explicit permissions.
+- Data older than the configured retention period is deleted or anonymised by a tested scheduled task.
+
+### Phase 7: PWA Installability and Cache Versioning
+
+Goal: satisfy installable PWA shell requirements without adding unnecessary push technology.
+
+Work:
+
+- Complete web app manifest, icons, display mode, theme colour, and install metadata.
+- Add a service worker only for shell caching and version-controlled asset refresh.
+- Ensure every app version change invalidates old cached assets immediately.
+- Add an in-app update/reload prompt when a new version is activated.
+- Do not add VAPID or push notification infrastructure.
+- Test install/update behaviour on current Chrome, Edge, Android, iOS/iPadOS Safari where relevant, and desktop Chromium.
+
+Exit criteria:
+
+- The app is installable as a PWA shell.
+- Version changes refresh local cached assets promptly.
+- Users are never stuck on an old app shell after deployment.
+
+### Phase 8: Production Hardening and Compliance
+
+Goal: remove the last pre-production risks.
+
+Work:
+
+- Add security headers appropriate to Cloudflare Tunnel deployment.
+- Review trust proxy settings for Cloudflare.
+- Add CSRF strategy or justify bearer-token-only design with storage and threat modelling.
+- Add structured logging with secret redaction.
+- Add request IDs and audit IDs.
+- Add backup, restore, and disaster recovery runbooks.
+- Complete DPIA, privacy policy, DPA wording, subprocessors, and retention documentation.
+- Add accessibility testing for homepage, login, dashboards, kiosk, and exports.
+- Add dependency audit and update workflow.
+
+Exit criteria:
+
+- A deployment review can trace every data category, retention rule, access path, and export path.
+- Security tests cover auth, institution isolation, kiosk token misuse, QR reuse, export scope, and retention.
+- No placeholder legal/security text remains.
+
+### Phase 9: Release Candidate and Institutional Pilot
+
+Goal: validate the complete product with realistic institutional workflows before wider use.
+
+Work:
+
+- Run a clean install from `.env`, first-admin setup, PM2 start, and Cloudflare Tunnel exposure.
+- Test root onboarding of multiple institutions.
+- Test institution admin and general-user workflows.
+- Test kiosk login, PWA install, single-question sessions, QR submission, and immediate guest feedback.
+- Test 2FA, password reset, email verification, suspension, and deactivation.
+- Test XLSX raw and aggregate exports.
+- Test 90-day retention using controlled fixture data.
+- Run accessibility, security, backup/restore, and dependency checks.
+
+Exit criteria:
+
+- A pilot institution can use QGlimpse without developer assistance or preview-mode behaviour.
+- All critical workflows have automated or scripted verification.
+- The release candidate has no Docker dependency, no development bypass, no placeholder secrets, and no misleading documentation.
 
 ## Validation
 
@@ -130,3 +360,5 @@ npm run lint
 npm run build
 npm test
 ```
+
+These commands prove only the current code state. They do not by themselves certify production readiness; the phase exit criteria above define the route to a fully functioning, secure application.

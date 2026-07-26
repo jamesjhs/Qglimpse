@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { CSSProperties, FormEvent, ReactNode } from 'react'
-import { Navigate, NavLink, Route, Routes, useSearchParams } from './router'
+import { Navigate, NavLink, Route, Routes, useLocation, useNavigate, useSearchParams } from './router'
 
 type Institution = {
   id: number
@@ -133,6 +133,23 @@ type PasswordInputProps = {
   autoComplete: 'current-password' | 'new-password'
   name: string
   placeholder: string
+}
+
+const publicPaths = new Set(['/', '/auth-core', '/help', '/privacy', '/dpia', '/magic-link'])
+const routeAliases: Record<string, string> = {
+  '/institution': '/institutions',
+}
+
+function sanitizeRedirectPath(value: string | null) {
+  if (!value || !value.startsWith('/') || value.startsWith('//')) {
+    return '/'
+  }
+  const target = new URL(value, window.location.origin)
+  if (target.origin !== window.location.origin || target.pathname === '/auth-core') {
+    return '/'
+  }
+  const aliasedPathname = routeAliases[target.pathname] ?? target.pathname
+  return `${aliasedPathname}${target.search}${target.hash}`
 }
 
 declare global {
@@ -310,6 +327,9 @@ function PasswordInput({ autoComplete, name, placeholder }: PasswordInputProps) 
 }
 
 function App() {
+  const location = useLocation()
+  const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
   const [bootstrap, setBootstrap] = useState<BootstrapPayload | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -364,6 +384,10 @@ function App() {
   const kioskPromptQuestions = useMemo(() => kioskQuestions.filter((q) => !q.isDemographic), [kioskQuestions])
   const kioskDemographicQuestions = useMemo(() => kioskQuestions.filter((q) => q.isDemographic), [kioskQuestions])
   const requiresTurnstileWidget = Boolean(bootstrap?.authCore.turnstileSiteKey && !bootstrap.authCore.devBypassTokenHint)
+  const currentPath = `${location.pathname}${location.search}`
+  const requestedRedirectPath = sanitizeRedirectPath(searchParams.get('next'))
+  const authRedirectPath = `/auth-core?next=${encodeURIComponent(currentPath)}`
+  const isPublicPath = publicPaths.has(location.pathname)
 
   useEffect(() => {
     const load = async () => {
@@ -450,7 +474,7 @@ function App() {
     </div>
   )
 
-  const requireSession = (element: ReactNode) => (sessionUser ? element : <Navigate to="/auth-core" replace />)
+  const requireSession = (element: ReactNode) => (sessionUser ? element : <Navigate to={authRedirectPath} replace />)
 
   const toggleKioskMode = async (institution: Institution) => {
     if (!authToken) {
@@ -579,6 +603,7 @@ function App() {
       return
     }
     await loadAuthenticatedWorkspace(session.token, session.user)
+    navigate(requestedRedirectPath, { replace: true })
   }
 
   const saveSmtpSettings = async (event: FormEvent<HTMLFormElement>) => {
@@ -678,12 +703,21 @@ function App() {
     event.preventDefault()
     setError(null)
     const formData = new FormData(event.currentTarget)
+    const email = String(formData.get('email') ?? '')
+    const password = String(formData.get('password') ?? '')
+    console.debug('Submitting login payload', {
+      emailLength: email.length,
+      passwordPresent: password.length > 0,
+      passwordLength: password.length,
+      turnstileTokenPresent: turnstileToken.length > 0,
+      turnstileTokenLength: turnstileToken.length,
+    })
     const response = await fetch('/api/auth/login', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        email: String(formData.get('email') ?? ''),
-        password: String(formData.get('password') ?? ''),
+        email,
+        password,
         turnstileToken,
       }),
     })
@@ -739,10 +773,12 @@ function App() {
     event.preventDefault()
     if (!authToken) return
     setError(null)
-    const formData = new FormData(event.currentTarget)
+    const form = event.currentTarget
+    const formData = new FormData(form)
     const currentPassword = String(formData.get('currentPassword') ?? '')
     const newPassword = String(formData.get('newPassword') ?? '')
     const confirmPassword = formData.has('confirmPassword') ? String(formData.get('confirmPassword') ?? '') : null
+    const wasRequiredPasswordChange = mustChangePw
     if (confirmPassword !== null && newPassword !== confirmPassword) {
       throw new Error('New passwords do not match.')
     }
@@ -758,10 +794,13 @@ function App() {
       const result = (await response.json()) as { error?: string }
       throw new Error(result.error ?? 'Unable to change password.')
     }
+    form.reset()
     setMustChangePw(false)
-    event.currentTarget.reset()
     if (sessionUser) {
       await loadAuthenticatedWorkspace(authToken, sessionUser)
+    }
+    if (wasRequiredPasswordChange) {
+      navigate(requestedRedirectPath, { replace: true })
     }
   }
 
@@ -1063,7 +1102,7 @@ function App() {
         onComplete={() => void completeKiosk(kioskDemoAnswers)}
         onDemoSkip={() => void advanceKioskDemographic(true)}
         onDemoNext={() => void advanceKioskDemographic(false)}
-      /> : <Navigate to="/auth-core" replace />} />
+      /> : <Navigate to={authRedirectPath} replace />} />
       <Route path="*" element={
     <div className="min-h-screen bg-gradient-to-b from-[var(--brand-50)] via-white to-slate-50 text-slate-900" style={appThemeStyle}>
       <header className="border-b border-[var(--brand-100)] bg-white/90 backdrop-blur">
@@ -1241,7 +1280,7 @@ function App() {
             path="/auth-core"
             element={
               sessionUser ? (
-                <Navigate to="/" replace />
+                <Navigate to={requestedRedirectPath} replace />
               ) : (
                 <section className="mx-auto grid w-full max-w-5xl gap-8 py-4 lg:grid-cols-[0.9fr_1.1fr] lg:items-center lg:py-10">
                 <div>
@@ -1304,6 +1343,10 @@ function App() {
               </section>
               )
             }
+          />
+          <Route
+            path="/institution"
+            element={requireSession(<Navigate to="/institutions" replace />)}
           />
           <Route
             path="/institutions"
@@ -1951,6 +1994,10 @@ function App() {
           <Route
             path="/magic-link"
             element={<MagicLinkHandler onSession={(token, user) => { setAuthToken(token); setSessionUser(user) }} />}
+          />
+          <Route
+            path="*"
+            element={!sessionUser && !isPublicPath ? <Navigate to={authRedirectPath} replace /> : <Navigate to="/" replace />}
           />
         </Routes>
       </main>

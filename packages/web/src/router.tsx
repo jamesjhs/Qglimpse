@@ -106,6 +106,16 @@ export function Navigate({ to, replace = false }: { to: string; replace?: boolea
   return null
 }
 
+export function useLocation() {
+  const { pathname, search } = useRouter()
+  return useMemo(() => ({ pathname, search }), [pathname, search])
+}
+
+export function useNavigate() {
+  const { navigate } = useRouter()
+  return navigate
+}
+
 type NavLinkProps = Omit<AnchorHTMLAttributes<HTMLAnchorElement>, 'className' | 'href'> & {
   className?: string | ((state: { isActive: boolean }) => string)
   to: string

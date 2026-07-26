@@ -188,6 +188,35 @@ function logErrorSummary(message, details) {
     console.error(`[${new Date().toISOString()}] ${message}`);
     console.error(details);
 }
+function describeLoginPayload(body) {
+    if (!body || typeof body !== 'object' || Array.isArray(body)) {
+        return {
+            bodyType: Array.isArray(body) ? 'array' : typeof body,
+            fields: null,
+        };
+    }
+    const payload = body;
+    return {
+        bodyType: 'object',
+        fields: {
+            email: {
+                type: typeof payload.email,
+                length: typeof payload.email === 'string' ? payload.email.length : null,
+            },
+            password: {
+                type: typeof payload.password,
+                present: typeof payload.password === 'string' && payload.password.length > 0,
+                length: typeof payload.password === 'string' ? payload.password.length : null,
+            },
+            turnstileToken: {
+                type: typeof payload.turnstileToken,
+                present: typeof payload.turnstileToken === 'string' && payload.turnstileToken.length > 0,
+                length: typeof payload.turnstileToken === 'string' ? payload.turnstileToken.length : null,
+            },
+            keys: Object.keys(payload),
+        },
+    };
+}
 async function enforceMinResponseTime(startedAt, minimumMs) {
     const remaining = minimumMs - (Date.now() - startedAt);
     if (remaining > 0) {
@@ -397,6 +426,14 @@ export function createApp() {
     app.post('/api/auth/login', authCoreLimiter, async (req, res) => {
         const parsed = loginSchema.safeParse(req.body);
         if (!parsed.success) {
+            logErrorSummary('Invalid login payload', {
+                ...describeLoginPayload(req.body),
+                issues: parsed.error.issues.map((issue) => ({
+                    path: issue.path.join('.'),
+                    code: issue.code,
+                    message: issue.message,
+                })),
+            });
             return res.status(400).json({ error: 'Invalid login payload.' });
         }
         const turnstileCheck = await verifyTurnstileToken(parsed.data.turnstileToken, req.ip);
