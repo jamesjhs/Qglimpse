@@ -445,4 +445,11 @@ packages/web/dist/assets/index-AGdwsD72.css
 packages/web/dist/assets/index-ZTMz4Ygn.js
 packages/web/dist/index.html
 /packages/web
+!/packages/
+!/packages/web/
+!/packages/web/public/
+!/packages/web/public/manifest.webmanifest
+!/packages/web/src/
+!/packages/web/src/router.tsx
+/packages/web/dist/assets/
 package-lock.json

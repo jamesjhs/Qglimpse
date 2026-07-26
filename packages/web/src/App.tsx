@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { CSSProperties, FormEvent } from 'react'
-import { Navigate, NavLink, Route, Routes, useSearchParams } from 'react-router-dom'
+import { Navigate, NavLink, Route, Routes, useSearchParams } from './router'
 
 type Institution = {
   id: number
