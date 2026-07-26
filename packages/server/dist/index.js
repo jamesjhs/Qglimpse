@@ -543,7 +543,9 @@ export function createApp() {
         }
         const parsed = changePasswordSchema.safeParse(req.body);
         if (!parsed.success) {
-            return res.status(400).json({ error: 'Invalid password change payload.' });
+            return res.status(400).json({
+                error: 'Please enter your current password and a new password that is at least 10 characters long.',
+            });
         }
         try {
             changeOwnPassword(auth.session.user.id, parsed.data.currentPassword, parsed.data.newPassword);

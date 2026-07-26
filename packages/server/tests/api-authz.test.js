@@ -91,6 +91,25 @@ test('root can access root overview and SMTP settings', async () => {
   assert.equal(typeof smtp.body.secureLoginType, 'string')
 })
 
+test('password change validation returns a friendly warning', async () => {
+  const rootToken = await login('root@quickglimpse.local', 'ChangeMeRoot123!')
+
+  const result = await api('/api/auth/profile/password', {
+    method: 'PATCH',
+    headers: {
+      Authorization: `Bearer ${rootToken}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ currentPassword: 'ChangeMeRoot123!', newPassword: 'short' }),
+  })
+
+  assert.equal(result.response.status, 400)
+  assert.equal(
+    result.body.error,
+    'Please enter your current password and a new password that is at least 10 characters long.',
+  )
+})
+
 test('institution admin cannot access root-only routes', async () => {
   const adminToken = await login('institution-admin@quickglimpse.local', 'ChangeMeInstitution123!')
 

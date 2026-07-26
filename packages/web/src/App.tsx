@@ -129,6 +129,12 @@ type AuthUser = {
 
 type TurnstileWidgetId = string | number
 
+type PasswordInputProps = {
+  autoComplete: 'current-password' | 'new-password'
+  name: string
+  placeholder: string
+}
+
 declare global {
   interface Window {
     turnstile?: {
@@ -276,6 +282,31 @@ function TurnstileWidget({
   }, [onTokenChange, resetSignal])
 
   return <div className="min-h-16" id={id} ref={containerRef} />
+}
+
+function PasswordInput({ autoComplete, name, placeholder }: PasswordInputProps) {
+  const [visible, setVisible] = useState(false)
+
+  return (
+    <div className="relative">
+      <input
+        autoComplete={autoComplete}
+        className="w-full rounded-xl border border-slate-300 px-3 py-2 pr-20"
+        name={name}
+        placeholder={placeholder}
+        required
+        type={visible ? 'text' : 'password'}
+      />
+      <button
+        aria-label={visible ? `Hide ${placeholder.toLowerCase()}` : `Show ${placeholder.toLowerCase()}`}
+        className="absolute inset-y-1.5 right-1.5 rounded-lg px-3 text-xs font-semibold text-slate-600 hover:bg-slate-100 hover:text-slate-900 focus:outline-none focus:ring-2 focus:ring-[var(--brand-500)]"
+        onClick={() => setVisible((current) => !current)}
+        type="button"
+      >
+        {visible ? 'Hide' : 'Show'}
+      </button>
+    </div>
+  )
 }
 
 function App() {
@@ -508,6 +539,22 @@ function App() {
     })
   }
 
+  const loadAuthenticatedWorkspace = async (token: string, user: AuthUser) => {
+    if (user.role === 'root') {
+      await Promise.all([loadRootOverview(token), loadSmtpSettings(token), loadInstitutionList(token)])
+    }
+  }
+
+  const applyAuthenticatedSession = async (session: { token: string; user: AuthUser; mustChangePassword: boolean }) => {
+    setAuthToken(session.token)
+    setSessionUser(session.user)
+    setMustChangePw(session.mustChangePassword)
+    if (session.mustChangePassword) {
+      return
+    }
+    await loadAuthenticatedWorkspace(session.token, session.user)
+  }
+
   const saveSmtpSettings = async (event: FormEvent<HTMLFormElement>) => {
     if (!authToken) {
       setError('Administrator access is required to manage SMTP settings.')
@@ -627,14 +674,7 @@ function App() {
       return
     }
     const session = result as { token: string; user: AuthUser; mustChangePassword: boolean }
-    setAuthToken(session.token)
-    setSessionUser(session.user)
-    if (session.mustChangePassword) {
-      setMustChangePw(true)
-    }
-    if (session.user.role === 'root') {
-      await Promise.all([loadRootOverview(session.token), loadSmtpSettings(session.token), loadInstitutionList(session.token)])
-    }
+    await applyAuthenticatedSession(session)
   }
 
   const verify2FA = async (event: FormEvent<HTMLFormElement>) => {
@@ -653,12 +693,7 @@ function App() {
     }
     const result = (await response.json()) as { token: string; user: AuthUser; mustChangePassword: boolean }
     setPendingTwoFa(null)
-    setAuthToken(result.token)
-    setSessionUser(result.user)
-    if (result.mustChangePassword) setMustChangePw(true)
-    if (result.user.role === 'root') {
-      await Promise.all([loadRootOverview(result.token), loadSmtpSettings(result.token), loadInstitutionList(result.token)])
-    }
+    await applyAuthenticatedSession(result)
   }
 
   const toggle2FA = async (userId: number, enabled: boolean) => {
@@ -693,6 +728,9 @@ function App() {
     }
     setMustChangePw(false)
     event.currentTarget.reset()
+    if (sessionUser) {
+      await loadAuthenticatedWorkspace(authToken, sessionUser)
+    }
   }
 
   const loadInstitutionList = async (token: string) => {
@@ -1194,8 +1232,8 @@ function App() {
                 <article className="rounded-2xl border border-[var(--brand-100)] bg-white p-6 shadow-sm shadow-[color:var(--brand-shadow)]">
                   <h3 className="text-xl font-semibold text-slate-950">Login</h3>
                   <form className="mt-5 grid gap-3" onSubmit={(event) => void loginAuthUser(event).catch((caughtError: unknown) => setError(caughtError instanceof Error ? caughtError.message : 'Login failed.'))}>
-                    <input className="rounded-xl border border-slate-300 px-3 py-2" name="email" placeholder="Email address" required type="email" />
-                    <input className="rounded-xl border border-slate-300 px-3 py-2" name="password" placeholder="Password" required type="password" />
+                    <input autoComplete="username" className="rounded-xl border border-slate-300 px-3 py-2" name="email" placeholder="Email address" required type="email" />
+                    <PasswordInput autoComplete="current-password" name="password" placeholder="Password" />
                     {requiresTurnstileWidget && bootstrap.authCore.turnstileSiteKey ? (
                       <TurnstileWidget
                         id="quickglimpse-login-turnstile"
@@ -1240,8 +1278,8 @@ function App() {
                         <div className="font-semibold text-amber-900">Password change required</div>
                         <p className="mt-1 text-amber-700">Your account requires a password change before you can continue.</p>
                         <form className="mt-3 grid gap-2" onSubmit={(event) => void changePassword(event).catch((err: unknown) => setError(err instanceof Error ? err.message : 'Password change failed.'))}>
-                          <input className="rounded-xl border border-slate-300 px-3 py-2" name="currentPassword" placeholder="Current password" required type="password" />
-                          <input className="rounded-xl border border-slate-300 px-3 py-2" name="newPassword" placeholder="New password (min 10 chars)" required type="password" />
+                          <PasswordInput autoComplete="current-password" name="currentPassword" placeholder="Current password" />
+                          <PasswordInput autoComplete="new-password" name="newPassword" placeholder="New password (min 10 chars)" />
                           <button className="w-fit rounded-full bg-amber-700 px-4 py-2 text-sm font-semibold text-white" type="submit">Change password</button>
                         </form>
                       </div>
@@ -1854,8 +1892,8 @@ function App() {
                     <p className="mt-3 text-sm text-amber-700">Login required.</p>
                   ) : (
                     <form className="mt-4 grid gap-3" onSubmit={(event) => void changePassword(event).catch((err: unknown) => setError(err instanceof Error ? err.message : 'Failed.'))}>
-                      <input className="rounded-xl border border-slate-300 px-3 py-2" name="currentPassword" placeholder="Current password" required type="password" />
-                      <input className="rounded-xl border border-slate-300 px-3 py-2" name="newPassword" placeholder="New password (min 10 chars)" required type="password" />
+                      <PasswordInput autoComplete="current-password" name="currentPassword" placeholder="Current password" />
+                      <PasswordInput autoComplete="new-password" name="newPassword" placeholder="New password (min 10 chars)" />
                       <button className="w-fit rounded-full bg-slate-900 px-5 py-2.5 text-sm font-semibold text-white" type="submit">Update password</button>
                     </form>
                   )}
