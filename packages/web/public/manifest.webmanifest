@@ -1,6 +1,6 @@
 {
-  "name": "Quick Glimpse",
-  "short_name": "QuickGlimpse",
+  "name": "Qglimpse",
+  "short_name": "Qglimpse",
   "description": "Institution-friendly visitor insight kiosk and dashboard shell.",
   "theme_color": "#0f172a",
   "background_color": "#f8fafc",

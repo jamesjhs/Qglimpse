@@ -1,8 +1,9 @@
-import { createHash, randomBytes, randomInt } from 'node:crypto';
+import { createHash, createHmac, randomBytes, randomInt } from 'node:crypto';
 import { compareSync, hashSync } from 'bcryptjs';
 import { getDb } from './db.js';
 import { config } from './config.js';
-export const userRoles = ['root', 'institution_admin', 'institution_user'];
+import { recordAuditEvent } from './audit.js';
+export const userRoles = ['root', 'institution_admin', 'institution_user', 'institution_kiosk'];
 export const userStatuses = ['active', 'suspended', 'deactivated'];
 function normalizeEmail(email) {
     return email.trim().toLowerCase();
@@ -17,7 +18,7 @@ function mapUser(row) {
     };
 }
 function hashToken(token) {
-    return createHash('sha256').update(token).digest('hex');
+    return createHmac('sha256', config.sessionSecret).update(token).digest('hex');
 }
 function generateSessionToken() {
     return randomBytes(32).toString('base64url');
@@ -25,12 +26,33 @@ function generateSessionToken() {
 function getSessionExpiryIso() {
     return new Date(Date.now() + config.sessionTtlMs).toISOString();
 }
+function getIdleCutoffIso() {
+    return new Date(Date.now() - config.sessionIdleTtlMs).toISOString();
+}
+function assertLoginAllowed(email, ip = 'unknown') {
+    const db = getDb();
+    const row = db
+        .prepare(`SELECT COUNT(*) AS count
+       FROM login_attempts
+       WHERE success = 0
+         AND (email = ? OR ip = ?)
+         AND datetime(created_at) > datetime('now', '-15 minutes')`)
+        .get(email, ip);
+    if (row.count >= 10) {
+        throw new Error('Too many failed login attempts. Try again later.');
+    }
+}
+function recordLoginAttempt(email, ip, success) {
+    getDb()
+        .prepare('INSERT INTO login_attempts (email, ip, success) VALUES (?, ?, ?)')
+        .run(email, ip ?? 'unknown', success ? 1 : 0);
+}
 export async function verifyTurnstileToken(token, remoteIp) {
     const trimmedToken = token.trim();
     if (!config.turnstile.secretKey) {
         return {
-            success: trimmedToken === config.turnstile.devBypassToken,
-            mode: 'dev',
+            success: true,
+            mode: 'disabled',
         };
     }
     const params = new URLSearchParams({
@@ -91,7 +113,8 @@ export function createSessionForUser(user) {
     const db = getDb();
     const token = generateSessionToken();
     const expiresAt = getSessionExpiryIso();
-    db.prepare('INSERT INTO auth_sessions (user_id, token_hash, expires_at, created_at) VALUES (?, ?, ?, CURRENT_TIMESTAMP)').run(user.id, hashToken(token), expiresAt);
+    db.prepare('UPDATE auth_sessions SET revoked_at = CURRENT_TIMESTAMP WHERE user_id = ? AND revoked_at IS NULL').run(user.id);
+    db.prepare('INSERT INTO auth_sessions (user_id, token_hash, expires_at, last_seen_at, created_at) VALUES (?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)').run(user.id, hashToken(token), expiresAt);
     db.prepare('UPDATE users SET last_login_at = CURRENT_TIMESTAMP WHERE id = ?').run(user.id);
     return {
         token,
@@ -102,6 +125,7 @@ export function createSessionForUser(user) {
 export function loginUser(input) {
     const db = getDb();
     const email = normalizeEmail(input.email);
+    assertLoginAllowed(email, input.ip);
     const row = db
         .prepare(`SELECT
          u.id,
@@ -120,9 +144,13 @@ export function loginUser(input) {
        WHERE u.email = ?`)
         .get(email);
     if (!row || !compareSync(input.password, row.passwordHash)) {
+        recordLoginAttempt(email, input.ip, false);
+        recordAuditEvent({ action: 'login_failed', metadata: { email } });
         throw new Error('Invalid email or password.');
     }
     if (row.status !== 'active') {
+        recordLoginAttempt(email, input.ip, false);
+        recordAuditEvent({ action: 'login_failed', targetUserId: row.id, metadata: { reason: row.status } });
         throw new Error(`Account is ${row.status}.`);
     }
     if (row.twoFaEnabled) {
@@ -132,9 +160,13 @@ export function loginUser(input) {
         const expiresAt = new Date(Date.now() + 10 * 60 * 1000).toISOString();
         const otpCode = `${randomInt(100000, 999999)}`;
         db.prepare(`INSERT INTO login_challenges (email, method, otp_code_hash, expires_at) VALUES (?, ?, ?, ?)`).run(email, 'email_code', createHash('sha256').update(otpCode).digest('hex'), expiresAt);
-        return { challengePending: true, email, expiresAt, preview: { otpCode } };
+        recordLoginAttempt(email, input.ip, true);
+        return { challengePending: true, email, expiresAt, delivery: { otpCode } };
     }
-    return { ...createSessionForUser(mapUser(row)), mustChangePassword: Boolean(row.mustChangePassword) };
+    recordLoginAttempt(email, input.ip, true);
+    const session = { ...createSessionForUser(mapUser(row)), mustChangePassword: Boolean(row.mustChangePassword) };
+    recordAuditEvent({ action: 'login_success', actor: session.user });
+    return session;
 }
 export function authenticateSession(token) {
     const db = getDb();
@@ -142,6 +174,7 @@ export function authenticateSession(token) {
         .prepare(`SELECT
          s.id AS sessionId,
          s.expires_at AS expiresAt,
+         s.last_seen_at AS lastSeenAt,
          u.id,
          u.email,
          u.role,
@@ -151,11 +184,13 @@ export function authenticateSession(token) {
        JOIN users u ON u.id = s.user_id
        WHERE s.token_hash = ?
          AND s.revoked_at IS NULL
-         AND datetime(s.expires_at) > datetime('now')`)
-        .get(hashToken(token));
+         AND datetime(s.expires_at) > datetime('now')
+         AND datetime(s.last_seen_at) > datetime(?)`)
+        .get(hashToken(token), getIdleCutoffIso());
     if (!row || row.status !== 'active') {
         return null;
     }
+    db.prepare('UPDATE auth_sessions SET last_seen_at = CURRENT_TIMESTAMP WHERE id = ?').run(row.sessionId);
     return {
         sessionId: row.sessionId,
         expiresAt: row.expiresAt,
@@ -170,8 +205,16 @@ export function authenticateSession(token) {
 }
 export function logoutSession(token) {
     const db = getDb();
-    db.prepare("UPDATE auth_sessions SET revoked_at = CURRENT_TIMESTAMP WHERE token_hash = ? AND revoked_at IS NULL")
-        .run(hashToken(token));
+    const row = db
+        .prepare(`SELECT u.id, u.email, u.role, u.status, u.institution_id AS institutionId
+       FROM auth_sessions s
+       JOIN users u ON u.id = s.user_id
+       WHERE s.token_hash = ? AND s.revoked_at IS NULL`)
+        .get(hashToken(token));
+    db.prepare("UPDATE auth_sessions SET revoked_at = CURRENT_TIMESTAMP WHERE token_hash = ? AND revoked_at IS NULL").run(hashToken(token));
+    if (row) {
+        recordAuditEvent({ action: 'logout', actor: row });
+    }
 }
 export function listUsers() {
     const db = getDb();
@@ -210,6 +253,9 @@ export function updateUserStatus(id, status) {
         .get(id);
 }
 export function ensureSeedCredentials() {
+    if (config.isProduction) {
+        return;
+    }
     const db = getDb();
     const seedUsers = [
         {
@@ -316,6 +362,7 @@ export function toggle2FA(targetUserId, enabled, requestingUser) {
         throw new Error('You can only manage 2FA for yourself.');
     }
     db.prepare('UPDATE users SET two_fa_enabled = ? WHERE id = ?').run(enabled ? 1 : 0, targetUserId);
+    recordAuditEvent({ action: '2fa_changed', actor: requestingUser, targetUserId, metadata: { enabled } });
 }
 export function updateUserEmail(userId, newEmail) {
     const db = getDb();
@@ -390,6 +437,7 @@ export function verifyOtpChallenge(email, code) {
         status: userRow.status,
         institutionId: userRow.institutionId,
     });
+    recordAuditEvent({ action: 'login_success', actor: session.user, metadata: { method: 'email_code' } });
     return { ...session, mustChangePassword: Boolean(userRow.mustChangePassword) };
 }
 export function verifyMagicLinkChallenge(token) {
@@ -415,11 +463,13 @@ export function verifyMagicLinkChallenge(token) {
         throw new Error('User not found or inactive.');
     }
     db.prepare('UPDATE login_challenges SET consumed_at = CURRENT_TIMESTAMP WHERE id = ?').run(challenge.id);
-    return createSessionForUser({
+    const session = createSessionForUser({
         id: userRow.id,
         email: userRow.email,
         role: userRow.role,
         status: userRow.status,
         institutionId: userRow.institutionId,
     });
+    recordAuditEvent({ action: 'login_success', actor: session.user, metadata: { method: 'magic_link' } });
+    return session;
 }

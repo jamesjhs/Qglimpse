@@ -70,7 +70,6 @@ async function login(email, password) {
     body: JSON.stringify({
       email,
       password,
-      turnstileToken: 'dev-turnstile-pass',
     }),
   })
   assert.equal(response.status, 200)
@@ -124,7 +123,6 @@ test('required password change accepts a new password after login', async () => 
     body: JSON.stringify({
       email: 'locked-user@example.com',
       password: 'TemporaryPassword123!',
-      turnstileToken: 'dev-turnstile-pass',
     }),
   })
   assert.equal(lockedLogin.response.status, 200)

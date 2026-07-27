@@ -1,16 +1,26 @@
-# Quick Glimpse Privacy Policy
+# Qglimpse Privacy Policy
 
 ## Scope
 
-This policy applies to Quick Glimpse deployments operated by an institution using this software.
+This policy applies to Qglimpse deployments operated by an institution using this software.
 
 ## What data is processed
 
 - Institution account and administration data (institution name, account email, role, account status).
-- Anonymous visitor feedback responses submitted through kiosk/public flows.
+- Anonymous visitor feedback responses submitted through logged-in kiosk or QR guest flows.
 - Optional demographic category answers used for grouped analytics.
 
-Quick Glimpse is designed so direct visitor identifiers are not required for standard survey capture.
+Qglimpse is designed so direct visitor identifiers are not required for standard feedback capture.
+
+Qglimpse may process only these anonymous guest data categories:
+
+- Feedback answer values for configured question types.
+- Question metadata needed to interpret the answer.
+- Random kiosk or QR session metadata needed for abuse prevention and analytics.
+- Optional broad demographic category answers.
+- Derived aggregate analytics and export audit metadata.
+
+Qglimpse must not ask guests for names, contact details, exact dates of birth, national identifiers, patient/student/customer IDs, appointment IDs, payment details, precise geolocation, photographs, audio, video, biometrics, diagnosis details, or other direct identifiers. IP addresses and raw user-agent strings must not be stored with guest feedback.
 
 ## Why data is processed
 
@@ -24,7 +34,7 @@ Quick Glimpse is designed so direct visitor identifiers are not required for sta
 - Session expiry and revocation.
 - Security headers (CSP, HSTS, X-Frame-Options, CORP/COOP).
 - Rate limiting on high-risk endpoints.
-- SQLite data persistence under controlled server filesystem access.
+- Encrypted SQLite data persistence under controlled server filesystem access.
 
 ## Data sharing
 
@@ -33,8 +43,10 @@ SMTP delivery providers may process email metadata when email features are used.
 
 ## Retention and deletion
 
-Retention windows are defined by the operator. Institutions should establish retention and deletion procedures appropriate to local policy and law.
+Default retention is 90 days for raw feedback responses, kiosk sessions, QR tokens, demographic payloads, and direct analytics inputs. Institutions may configure a shorter window. A longer window requires explicit root approval and matching privacy documentation before use.
+
+Backups must be encrypted and access controlled. Backup sets containing raw feedback must age out on the same 90-day default schedule unless the institution has a stricter policy. Restored data must pass retention cleanup before it is made available to users.
 
 ## Contact
 
-Institution operators should provide a data protection contact for local deployment questions.
+Each production deployment must publish the institution's data protection contact on the public policy page or adjacent institutional privacy notice before collecting real guest feedback.

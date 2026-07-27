@@ -48,9 +48,19 @@ test('smtp settings keep required fields only', () => {
   assert.equal(updated.passwordSet, true)
 })
 
-test('magic link preview is generated for cross-device sign in', () => {
-  const challenge = services.createLoginChallenge('user@example.com', 'magic_link')
-  assert.match(challenge.preview.magicLink, /\/auth\/magic-link\?token=/)
+test('magic link challenge stores a single active token without exposing it', async () => {
+  const challenge = await services.createLoginChallenge('user@example.com', 'magic_link')
+  assert.equal(challenge.method, 'magic_link')
+  assert.equal('preview' in challenge, false)
+  const db = getDb()
+  const active = db
+    .prepare(
+      `SELECT COUNT(*) AS count
+       FROM login_challenges
+       WHERE email = ? AND method = 'magic_link' AND consumed_at IS NULL`,
+    )
+    .get('user@example.com')
+  assert.equal(active.count, 1)
 })
 
 test('kiosk status includes active questions payload', () => {

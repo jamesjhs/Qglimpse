@@ -53,10 +53,10 @@ type BootstrapPayload = {
     questionBankSeeded: number
   }
   authCore: {
-    supportedRoles: Array<'root' | 'institution_admin' | 'institution_user'>
+    supportedRoles: Array<'root' | 'institution_admin' | 'institution_user' | 'institution_kiosk'>
     userStatuses: Array<'active' | 'suspended' | 'deactivated'>
     turnstileSiteKey: string
-    devBypassTokenHint: string | null
+    turnstileRequired: boolean
   }
   questionTypes: string[]
 }
@@ -112,17 +112,16 @@ type TwoFaPending = {
   challengePending: true
   email: string
   expiresAt: string
-  preview: { otpCode: string }
 }
 
 type LoginResult =
   | TwoFaPending
-  | { token: string; user: AuthUser; mustChangePassword: boolean }
+  | { token: string; user: AuthUser; mustChangePassword: boolean; redirectPath?: string }
 
 type AuthUser = {
   id: number
   email: string
-  role: 'root' | 'institution_admin' | 'institution_user'
+  role: 'root' | 'institution_admin' | 'institution_user' | 'institution_kiosk'
   status: 'active' | 'suspended' | 'deactivated'
   institutionId: number | null
 }
@@ -135,8 +134,9 @@ type PasswordInputProps = {
   placeholder: string
 }
 
-const publicPaths = new Set(['/', '/auth-core', '/help', '/privacy', '/dpia', '/magic-link'])
+const publicPaths = new Set(['/', '/login', '/auth-core', '/help', '/privacy', '/dpia', '/magic-link'])
 const routeAliases: Record<string, string> = {
+  '/app': '/',
   '/institution': '/institutions',
 }
 
@@ -145,7 +145,7 @@ function sanitizeRedirectPath(value: string | null) {
     return '/'
   }
   const target = new URL(value, window.location.origin)
-  if (target.origin !== window.location.origin || target.pathname === '/auth-core') {
+  if (target.origin !== window.location.origin || target.pathname === '/login' || target.pathname === '/auth-core') {
     return '/'
   }
   const aliasedPathname = routeAliases[target.pathname] ?? target.pathname
@@ -342,9 +342,9 @@ function App() {
   const [pendingTwoFa, setPendingTwoFa] = useState<TwoFaPending | null>(null)
   const [mustChangePw, setMustChangePw] = useState(false)
   const [institutionList, setInstitutionList] = useState<Institution[]>([])
-  const [turnstileToken, setTurnstileToken] = useState('dev-turnstile-pass')
+  const [turnstileToken, setTurnstileToken] = useState('')
   const [turnstileResetSignal, setTurnstileResetSignal] = useState(0)
-  const [interestTurnstileToken, setInterestTurnstileToken] = useState('dev-turnstile-pass')
+  const [interestTurnstileToken, setInterestTurnstileToken] = useState('')
   const [interestTurnstileResetSignal, setInterestTurnstileResetSignal] = useState(0)
   const [interestMessage, setInterestMessage] = useState<string | null>(null)
   const [smtpForm, setSmtpForm] = useState<SmtpFormState>({
@@ -383,10 +383,10 @@ function App() {
   const [crossTabData, setCrossTabData] = useState<Array<{ primaryAnswer: string; demoAnswer: string; count: number | '< 5' }> | null>(null)
   const kioskPromptQuestions = useMemo(() => kioskQuestions.filter((q) => !q.isDemographic), [kioskQuestions])
   const kioskDemographicQuestions = useMemo(() => kioskQuestions.filter((q) => q.isDemographic), [kioskQuestions])
-  const requiresTurnstileWidget = Boolean(bootstrap?.authCore.turnstileSiteKey && !bootstrap.authCore.devBypassTokenHint)
+  const requiresTurnstileWidget = Boolean(bootstrap?.authCore.turnstileSiteKey && bootstrap.authCore.turnstileRequired)
   const currentPath = `${location.pathname}${location.search}`
   const requestedRedirectPath = sanitizeRedirectPath(searchParams.get('next'))
-  const authRedirectPath = `/auth-core?next=${encodeURIComponent(currentPath)}`
+  const authRedirectPath = `/login?next=${encodeURIComponent(currentPath)}`
   const isPublicPath = publicPaths.has(location.pathname)
 
   useEffect(() => {
@@ -396,8 +396,8 @@ function App() {
         if (!response.ok) throw new Error('Unable to load bootstrap data.')
         const payload = (await response.json()) as BootstrapPayload
         setBootstrap(payload)
-        setTurnstileToken(payload.authCore.devBypassTokenHint ?? '')
-        setInterestTurnstileToken(payload.authCore.devBypassTokenHint ?? '')
+        setTurnstileToken('')
+        setInterestTurnstileToken('')
       } catch (caughtError) {
         setError(caughtError instanceof Error ? caughtError.message : 'Unknown error')
       } finally {
@@ -595,7 +595,13 @@ function App() {
     }
   }
 
-  const applyAuthenticatedSession = async (session: { token: string; user: AuthUser; mustChangePassword: boolean }) => {
+  const defaultRedirectForRole = (role: AuthUser['role']) => {
+    if (role === 'institution_kiosk') return '/kiosk'
+    if (role === 'root') return '/root'
+    return '/'
+  }
+
+  const applyAuthenticatedSession = async (session: { token: string; user: AuthUser; mustChangePassword: boolean; redirectPath?: string }) => {
     setAuthToken(session.token)
     setSessionUser(session.user)
     setMustChangePw(session.mustChangePassword)
@@ -603,7 +609,8 @@ function App() {
       return
     }
     await loadAuthenticatedWorkspace(session.token, session.user)
-    navigate(requestedRedirectPath, { replace: true })
+    const redirectPath = requestedRedirectPath === '/' ? (session.redirectPath ?? defaultRedirectForRole(session.user.role)) : requestedRedirectPath
+    navigate(redirectPath, { replace: true })
   }
 
   const saveSmtpSettings = async (event: FormEvent<HTMLFormElement>) => {
@@ -733,7 +740,7 @@ function App() {
       setPendingTwoFa(result)
       return
     }
-    const session = result as { token: string; user: AuthUser; mustChangePassword: boolean }
+    const session = result as { token: string; user: AuthUser; mustChangePassword: boolean; redirectPath?: string }
     await applyAuthenticatedSession(session)
   }
 
@@ -751,7 +758,7 @@ function App() {
       const result = (await response.json()) as { error?: string }
       throw new Error(result.error ?? 'OTP verification failed.')
     }
-    const result = (await response.json()) as { token: string; user: AuthUser; mustChangePassword: boolean }
+    const result = (await response.json()) as { token: string; user: AuthUser; mustChangePassword: boolean; redirectPath?: string }
     setPendingTwoFa(null)
     await applyAuthenticatedSession(result)
   }
@@ -965,7 +972,10 @@ function App() {
     try {
       const slug = selectedInstitution?.slug
       if (!slug) return
-      const response = await fetch(`/api/kiosk/${slug}/session`, { method: 'POST' })
+      const response = await fetch(`/api/kiosk/${slug}/session`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${authToken}` },
+      })
       if (!response.ok) {
         const result = (await response.json()) as { error?: string }
         throw new Error(result.error ?? 'Unable to start kiosk session.')
@@ -1064,7 +1074,7 @@ function App() {
   }
 
   if (loading) {
-    return <div className="mx-auto flex min-h-screen max-w-6xl items-center justify-center px-6">Loading Quick Glimpse…</div>
+    return <div className="mx-auto flex min-h-screen max-w-6xl items-center justify-center px-6">Loading Qglimpse...</div>
   }
 
   if (!bootstrap) {
@@ -1077,7 +1087,7 @@ function App() {
 
   return (
     <Routes>
-      <Route path="/kiosk" element={sessionUser ? <KioskFullScreen
+      <Route path="/kiosk" element={sessionUser?.role === 'institution_kiosk' ? <KioskFullScreen
         institution={selectedInstitution}
         colorScheme={activeColorScheme}
         kioskState={kioskState}
@@ -1102,7 +1112,7 @@ function App() {
         onComplete={() => void completeKiosk(kioskDemoAnswers)}
         onDemoSkip={() => void advanceKioskDemographic(true)}
         onDemoNext={() => void advanceKioskDemographic(false)}
-      /> : <Navigate to={authRedirectPath} replace />} />
+      /> : <Navigate to={sessionUser ? '/' : authRedirectPath} replace />} />
       <Route path="*" element={
     <div className="min-h-screen bg-gradient-to-b from-[var(--brand-50)] via-white to-slate-50 text-slate-900" style={appThemeStyle}>
       <header className="border-b border-[var(--brand-100)] bg-white/90 backdrop-blur">
@@ -1111,7 +1121,7 @@ function App() {
             <p className="text-sm font-semibold uppercase tracking-[0.2em] text-[var(--brand-700)]">Visitor feedback platform</p>
             <h1 className="mt-2 text-3xl font-semibold tracking-tight md:text-4xl">{bootstrap.app.name}</h1>
             <p className="mt-3 max-w-3xl text-slate-600">
-              Quick Glimpse helps organizations capture in-person feedback quickly with kiosk surveys, secure sign-in, and easy analytics.
+              Qglimpse helps organizations capture anonymous in-person feedback quickly with logged-in kiosks, secure sign-in, and easy analytics.
             </p>
           </div>
         </div>
@@ -1119,14 +1129,14 @@ function App() {
           {!sessionUser ? (
             <>
               <NavLink className={navClass} to="/">Home</NavLink>
-              <NavLink className={navClass} to="/auth-core">Sign in</NavLink>
+              <NavLink className={navClass} to="/login">Sign in</NavLink>
             </>
           ) : (
             <>
               <NavLink className={navClass} to="/">Overview</NavLink>
               <NavLink className={navClass} to="/profile">Profile</NavLink>
               <NavLink className={navClass} to="/institutions">Institutions</NavLink>
-              <NavLink className={navClass} to="/kiosk">Kiosk</NavLink>
+              {sessionUser.role === 'institution_kiosk' ? <NavLink className={navClass} to="/kiosk">Kiosk</NavLink> : null}
               <NavLink className={navClass} to="/questions">Questions</NavLink>
               <NavLink className={navClass} to="/analytics">Analytics</NavLink>
               {sessionUser.role === 'root' ? (
@@ -1155,13 +1165,13 @@ function App() {
                         Understand your visitors in the moment.
                       </h2>
                       <p className="mt-5 max-w-2xl text-lg leading-8 text-slate-700">
-                        Quick Glimpse is a lightweight web app that helps institutions collect simple feedback,
-                        understand their audience, and share useful information through tablets, kiosks, or QR-code links.
+                        Qglimpse is a lightweight web app that helps institutions collect one active anonymous feedback answer,
+                        understand their audience, and share useful information through logged-in kiosks and single-use QR links.
                       </p>
                       <div className="mt-7 flex flex-wrap items-center gap-3">
                         <NavLink
                           className="rounded-full bg-[var(--brand-700)] px-6 py-3 text-sm font-semibold text-white shadow-lg shadow-[color:var(--brand-shadow)]"
-                          to="/auth-core"
+                          to="/login"
                         >
                           Sign in
                         </NavLink>
@@ -1173,7 +1183,7 @@ function App() {
                     >
                       <h3 className="text-lg font-semibold text-slate-950">Register institutional interest</h3>
                       <p className="mt-2 text-sm leading-6 text-slate-600">
-                        Leave a placeholder enquiry for a school, health service, venue, or public-facing team.
+                        Register interest for a school, health service, venue, or public-facing team.
                       </p>
                       <div className="mt-5 grid gap-3">
                         <input className="rounded-xl border border-slate-300 px-3 py-2" name="institutionName" placeholder="Institution name" required type="text" />
@@ -1182,7 +1192,7 @@ function App() {
                         <textarea
                           className="min-h-28 rounded-xl border border-slate-300 px-3 py-2"
                           name="notes"
-                          placeholder="Where would you use Quick Glimpse?"
+                          placeholder="Where would you use Qglimpse?"
                         />
                         {requiresTurnstileWidget && bootstrap.authCore.turnstileSiteKey ? (
                           <TurnstileWidget
@@ -1235,7 +1245,7 @@ function App() {
                     <article className={statCardClass}>
                       <p className="text-sm font-medium text-slate-500">Kiosk-enabled</p>
                       <p className="mt-3 text-3xl font-semibold">{bootstrap.institutions.filter((item) => item.kioskModeEnabled).length}</p>
-                      <p className="mt-2 text-sm text-slate-600">Institutional users can toggle kiosk mode without escalation to platform administration.</p>
+                      <p className="mt-2 text-sm text-slate-600">Institution admins can toggle kiosk mode for their own institution.</p>
                     </article>
                     <article className={statCardClass}>
                       <p className="text-sm font-medium text-slate-500">Demographic prompts</p>
@@ -1277,7 +1287,7 @@ function App() {
             }
           />
           <Route
-            path="/auth-core"
+            path="/login"
             element={
               sessionUser ? (
                 <Navigate to={requestedRedirectPath} replace />
@@ -1286,7 +1296,7 @@ function App() {
                 <div>
                   <p className="text-xs font-semibold uppercase tracking-[0.2em] text-[var(--brand-700)]">Account access</p>
                   <h2 className="mt-4 text-4xl font-semibold leading-tight tracking-tight text-slate-950 md:text-5xl">
-                    Sign in to Quick Glimpse.
+                    Sign in to Qglimpse.
                   </h2>
                   <p className="mt-5 max-w-md text-base leading-7 text-slate-600">
                     Use your institutional account to continue to the right workspace for your role.
@@ -1331,8 +1341,7 @@ function App() {
                     {pendingTwoFa ? (
                       <div className="mt-4 rounded-xl border border-sky-200 bg-sky-50 px-4 py-4 text-sm">
                         <div className="font-semibold text-sky-900">2FA required</div>
-                        <div className="mt-1 text-sky-700">Enter the OTP sent to {pendingTwoFa.email}</div>
-                        {pendingTwoFa.preview.otpCode ? <div className="mt-1 font-mono text-sky-800">One-time code: {pendingTwoFa.preview.otpCode}</div> : null}
+                        <div className="mt-1 text-sky-700">Enter the one-time code sent to {pendingTwoFa.email}.</div>
                         <form className="mt-3 flex gap-2" onSubmit={(event) => void verify2FA(event).catch((err: unknown) => setError(err instanceof Error ? err.message : '2FA failed.'))}>
                           <input className="rounded-xl border border-slate-300 px-3 py-2 font-mono" name="code" placeholder="000000" required />
                           <button className="rounded-full bg-sky-700 px-4 py-2 text-sm font-semibold text-white" type="submit">Verify</button>
@@ -1343,6 +1352,10 @@ function App() {
               </section>
               )
             }
+          />
+          <Route
+            path="/auth-core"
+            element={<Navigate to="/login" replace />}
           />
           <Route
             path="/institution"
@@ -1941,11 +1954,11 @@ function App() {
                     Use this page as the central quick-help reference for staff and administrators.
                   </p>
                   <ul className="mt-4 list-disc space-y-2 pl-5 text-sm text-slate-700">
-                    <li>Sign in from <code>/auth-core</code> using your institutional account.</li>
+                    <li>Sign in from <code>/login</code> using your institutional account.</li>
                     <li>Enable kiosk mode from the Institutions view if visitor collection is paused.</li>
                     <li>Use Analytics for date-range response summaries and demographic cross-tab views.</li>
                     <li>Use Profile to update password and 2FA.</li>
-                    <li>Platform administrators can manage SMTP settings and institution lifecycle controls.</li>
+                    <li>Root users can manage SMTP settings, retention controls, and institution lifecycle controls.</li>
                   </ul>
                 </article>
               </section>
@@ -1958,13 +1971,14 @@ function App() {
                 <article className={statCardClass}>
                   <h2 className="text-xl font-semibold">Privacy policy</h2>
                   <p className="mt-2 text-sm text-slate-700">
-                    Quick Glimpse is designed for anonymous visitor feedback. Visitor names, direct contact details,
-                    and other direct identifiers are not required in normal kiosk use.
+                    Qglimpse is designed for anonymous visitor feedback. Visitor names, direct contact details,
+                    and other direct identifiers are banned in guest feedback.
                   </p>
                   <ul className="mt-4 list-disc space-y-2 pl-5 text-sm text-slate-700">
                     <li>Institution and account administration data is stored for service operation.</li>
                     <li>Visitor feedback responses are stored with anonymous session linkage for analytics only.</li>
                     <li>Demographic questions are optional and category-based.</li>
+                    <li>Raw feedback, kiosk sessions, QR tokens, demographic payloads, and direct analytics inputs use 90-day default retention.</li>
                     <li>Institution administrators control question configuration and display behavior.</li>
                   </ul>
                 </article>
@@ -1978,13 +1992,14 @@ function App() {
                 <article className={statCardClass}>
                   <h2 className="text-xl font-semibold">Data Protection Impact Assessment (DPIA) summary</h2>
                   <p className="mt-2 text-sm text-slate-700">
-                    Quick Glimpse minimises data processing by separating administrator account data from anonymous
+                    Qglimpse minimises data processing by separating administrator account data from anonymous
                     visitor response data and limiting privileged visibility to aggregate metrics.
                   </p>
                   <ul className="mt-4 list-disc space-y-2 pl-5 text-sm text-slate-700">
                     <li>Purpose limitation: service-quality measurement and operational insight.</li>
                     <li>Data minimisation: no required direct identifiers for kiosk respondents.</li>
                     <li>Access controls: role-based authorization and institution scoping.</li>
+                    <li>Retention controls: raw guest data expires after 90 days by default.</li>
                     <li>Security controls: CSP, HSTS, CORP/COOP, session expiry, and rate limiting.</li>
                   </ul>
                 </article>
@@ -1993,7 +2008,7 @@ function App() {
           />
           <Route
             path="/magic-link"
-            element={<MagicLinkHandler onSession={(token, user) => { setAuthToken(token); setSessionUser(user) }} />}
+            element={<MagicLinkHandler onSession={(session) => void applyAuthenticatedSession(session)} />}
           />
           <Route
             path="*"
@@ -2018,7 +2033,7 @@ function App() {
   )
 }
 
-function MagicLinkHandler({ onSession }: { onSession: (token: string, user: AuthUser) => void }) {
+function MagicLinkHandler({ onSession }: { onSession: (session: { token: string; user: AuthUser; mustChangePassword: boolean; redirectPath?: string }) => void }) {
   const [searchParams] = useSearchParams()
   const tokenParam = searchParams.get('token')
   const [status, setStatus] = useState<'loading' | 'success' | 'error'>(() => (tokenParam ? 'loading' : 'error'))
@@ -2034,10 +2049,10 @@ function MagicLinkHandler({ onSession }: { onSession: (token: string, user: Auth
           const result = (await response.json()) as { error?: string }
           throw new Error(result.error ?? 'Invalid or expired magic link.')
         }
-        return response.json() as Promise<{ token: string; user: AuthUser }>
+        return response.json() as Promise<{ token: string; user: AuthUser; mustChangePassword?: boolean; redirectPath?: string }>
       })
       .then((result) => {
-        onSession(result.token, result.user)
+        onSession({ ...result, mustChangePassword: Boolean(result.mustChangePassword) })
         setStatus('success')
         setMessage(`Signed in as ${result.user.email}`)
       })
@@ -2111,7 +2126,7 @@ function KioskFullScreen(props: KioskFullScreenProps) {
         <div className="flex flex-col items-center gap-8 text-center">
           <div>
               <p className="text-sm font-semibold uppercase tracking-[0.2em] text-[var(--brand-100)]">Patient feedback</p>
-            <h1 className="mt-3 text-4xl font-semibold tracking-tight md:text-5xl">{institution?.name ?? 'Quick Glimpse'}</h1>
+            <h1 className="mt-3 text-4xl font-semibold tracking-tight md:text-5xl">{institution?.name ?? 'Qglimpse'}</h1>
             <p className="mt-4 max-w-md text-lg text-slate-300">Share your experience with us. Your feedback helps us improve our service.</p>
           </div>
           {error ? (

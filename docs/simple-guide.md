@@ -1,12 +1,12 @@
-# Quick Glimpse — Plain-English Staff Guide
+# Qglimpse Plain-English Staff Guide
 
-This guide is for clinic and reception staff who use Quick Glimpse day-to-day. No technical knowledge is required.
+This guide is for clinic and reception staff who use Qglimpse day-to-day. No technical knowledge is required.
 
 ---
 
-## What is Quick Glimpse?
+## What is Qglimpse?
 
-Quick Glimpse is a digital feedback kiosk. Visitors tap through a short survey on a touchscreen (or tablet) near your reception area. Their anonymous answers help your team understand who is visiting and how they feel about their experience.
+Qglimpse is a digital feedback kiosk. Visitors answer one active feedback question on a touchscreen or tablet near your reception area. They may also answer optional anonymous demographic questions if your institution has enabled them.
 
 ---
 
@@ -16,15 +16,15 @@ Quick Glimpse is a digital feedback kiosk. Visitors tap through a short survey o
 
 1. The kiosk screen shows a welcome message when it is active.
 2. The visitor taps **Start** to begin.
-3. They answer a few short questions — multiple choice, star ratings, or brief text.
-4. At the end they provide optional demographic information (see [Privacy note](#privacy-note) below).
+3. They answer the active feedback question.
+4. At the end they may provide optional demographic information (see [Privacy note](#privacy-note) below).
 5. They tap **Done**. Their answers are saved automatically.
 
-The whole survey takes about one to two minutes.
+The intended production flow is deliberately short. The current pre-production scaffold may still show more than one feedback question until single-question mode is enforced.
 
 ### If the kiosk shows "Kiosk is not available"
 
-Kiosk mode has been switched off. Contact your institution admin (or whoever manages Quick Glimpse for your site) to turn it back on.
+Kiosk mode has been switched off. Contact your institution admin, or whoever manages Qglimpse for your site, to turn it back on.
 
 ### If questions are missing at certain times
 
@@ -32,12 +32,14 @@ Some questions are scheduled to appear only on specific days or during certain h
 
 ---
 
-## Viewing analytics (for admins)
+## Viewing analytics
 
 1. Open `http://your-site-address` and sign in with your admin account.
 2. Click **Analytics** in the left menu.
 3. Use the **date range** picker to choose a period.
 4. Each question shows a summary chart of how visitors responded.
+
+Institution general users may view analytics for their own institution. Institution admins control whether general users may export data once export permissions are implemented.
 
 ### Cross-tabulation
 
@@ -104,14 +106,14 @@ Demographic answers are stored alongside the survey responses and appear in anal
 
 ## Privacy note
 
-**Quick Glimpse does not collect any personally identifiable information (PII).**
+**Qglimpse must not collect personally identifiable guest information.**
 
-- Visitors are not asked for their name, date of birth, contact details, or any information that could identify them.
+- Visitors must not be asked for their name, exact date of birth, contact details, IDs, appointment details, precise location, payment details, images, audio, video, diagnosis details, or any information that could identify them.
 - Demographic questions use ranges or categories (e.g. "18–34" or "General enquiry"), never specific personal details.
 - Each kiosk session is assigned a random anonymous token — there is no way to trace a session back to a specific individual.
-- No data is shared with third parties.
+- Raw feedback, kiosk sessions, QR tokens, demographic payloads, and direct analytics inputs are retained for 90 days by default unless your institution has a shorter approved policy.
 
-If your organisation has specific data-handling policies, confirm with your data protection officer that Quick Glimpse's collection scope is compatible with those policies.
+If your organisation has specific data-handling policies, confirm with your data protection officer that Qglimpse's collection scope is compatible with those policies.
 
 ---
 
@@ -119,7 +121,7 @@ If your organisation has specific data-handling policies, confirm with your data
 
 ### Signing in
 
-Go to your Quick Glimpse URL and enter your email and password. If your account has **two-factor authentication (2FA)** enabled, you will be asked to enter a one-time code sent to your email.
+Go to your Qglimpse URL and enter your email and password. The login path is `/login`. Kiosk-only users are routed to the kiosk surface; staff users are routed to their staff workspace.
 
 ### Changing your password
 
@@ -129,11 +131,11 @@ Go to your Quick Glimpse URL and enter your email and password. If your account 
 
 ### Forgotten password
 
-On the login page, click **Forgot password** and enter your email address. You will receive a password-reset link. The link expires after 15 minutes.
+On the login page, click **Forgot password** and enter your email address. If the account exists, Qglimpse sends a single-use reset link by email.
 
 ### Magic link sign-in
 
-Instead of a password, you can request a **magic link** from the login page. Click the link in the email you receive and you will be signed in automatically. Magic links are single-use and expire after 15 minutes.
+Instead of a password, you can request a **magic link** from the login page. Qglimpse sends a single-use sign-in link by email.
 
 ---
 

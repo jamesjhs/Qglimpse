@@ -65,7 +65,7 @@ npm start
 - Confirm `TURNSTILE_SITE_KEY` and `TURNSTILE_SECRET_KEY` are both set from the same Cloudflare Turnstile widget.
 - Confirm the deployment CSP allows `https://challenges.cloudflare.com` for scripts, frames, and connections.
 - Reload the page and complete the Turnstile challenge again.
-- In local development only, leave `TURNSTILE_SECRET_KEY` empty to use the built-in `dev-turnstile-pass` bypass.
+- In local development only, leave `TURNSTILE_SECRET_KEY` empty to disable Turnstile verification locally.
 
 ### Rate limit `429` on auth endpoints
 
@@ -81,17 +81,17 @@ npm start
 
 ### Test email fails: `connect ECONNREFUSED`
 
-**Cause:** The SMTP server address or port is wrong, or the server is not reachable from the host running Quick Glimpse.
+**Cause:** The SMTP server address or port is wrong, or the server is not reachable from the host running Qglimpse.
 
 **Fix:**
-1. Verify `serverAddress` and `port` in the platform admin SMTP settings.
+1. Verify `serverAddress` and `port` in the root user SMTP settings.
 2. Confirm network connectivity: `telnet <serverAddress> <port>`.
 
 ### Test email fails: `Invalid login` / `Authentication failed`
 
 **Cause:** Wrong `username` or `password` in SMTP settings.
 
-**Fix:** Update credentials via the platform admin UI (`Settings → SMTP`) or `PUT /api/settings/smtp`.
+**Fix:** Update credentials via the root user UI (`Settings → SMTP`) or `PUT /api/settings/smtp`.
 
 ### Test email fails: `self-signed certificate` / TLS error
 

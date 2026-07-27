@@ -454,3 +454,9 @@ packages/web/dist/index.html
 /packages/web/dist/assets/
 package-lock.json
 /packages
+!/packages/
+!/packages/server/
+!/packages/server/tests/
+!/packages/server/tests/db-encryption.test.js
+/packages/server/data/*.db-shm
+/packages/server/data/*.db-wal

@@ -1,12 +1,61 @@
-import { mkdirSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
-import Database from 'better-sqlite3';
+import Database from 'better-sqlite3-multiple-ciphers';
 import { config } from './config.js';
 import { demographicsTemplates, insightTemplates } from './data/demographics.js';
 let database;
+const sqlitePlaintextHeader = Buffer.from('SQLite format 3\0');
+const currentSchemaVersion = 2;
+function isPlaintextSqliteDatabase(databasePath) {
+    if (!existsSync(databasePath) || statSync(databasePath).size < sqlitePlaintextHeader.length) {
+        return false;
+    }
+    return readFileSync(databasePath)
+        .subarray(0, sqlitePlaintextHeader.length)
+        .equals(sqlitePlaintextHeader);
+}
+function applyEncryptionSettings(db) {
+    db.pragma("cipher = 'sqlcipher'");
+    db.pragma('legacy = 4');
+}
+function verifyDatabaseKey(db) {
+    db.prepare('SELECT count(*) AS count FROM sqlite_master').get();
+}
+function openEncryptedDatabase(databasePath) {
+    const encryptionKey = Buffer.from(config.databaseEncryptionKey, 'utf8');
+    const isExistingPlaintextDatabase = isPlaintextSqliteDatabase(databasePath);
+    const db = new Database(databasePath);
+    applyEncryptionSettings(db);
+    if (isExistingPlaintextDatabase) {
+        verifyDatabaseKey(db);
+        db.pragma('wal_checkpoint(TRUNCATE)');
+        db.pragma('journal_mode = DELETE');
+        db.rekey(encryptionKey);
+        db.close();
+        const encryptedDb = new Database(databasePath);
+        applyEncryptionSettings(encryptedDb);
+        encryptedDb.key(encryptionKey);
+        verifyDatabaseKey(encryptedDb);
+        return encryptedDb;
+    }
+    db.key(encryptionKey);
+    try {
+        verifyDatabaseKey(db);
+    }
+    catch (error) {
+        db.close();
+        throw new Error('Unable to open the encrypted database with QUICKGLIMPSE_DB_ENCRYPTION_KEY. Confirm the configured key matches the database file.', { cause: error });
+    }
+    return db;
+}
 function runMigrations(db) {
     db.exec(`
     PRAGMA foreign_keys = ON;
+    CREATE TABLE IF NOT EXISTS schema_migrations (
+      version INTEGER PRIMARY KEY,
+      applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+
     CREATE TABLE IF NOT EXISTS institutions (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       name TEXT NOT NULL,
@@ -42,9 +91,18 @@ function runMigrations(db) {
       user_id INTEGER NOT NULL,
       token_hash TEXT NOT NULL UNIQUE,
       expires_at TEXT NOT NULL,
+      last_seen_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
       revoked_at TEXT,
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS login_attempts (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      email TEXT NOT NULL,
+      ip TEXT NOT NULL,
+      success INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
 
     CREATE TABLE IF NOT EXISTS question_templates (
@@ -91,6 +149,21 @@ function runMigrations(db) {
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
 
+    CREATE TABLE IF NOT EXISTS audit_events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      audit_id TEXT NOT NULL UNIQUE,
+      action TEXT NOT NULL,
+      actor_user_id INTEGER,
+      actor_role TEXT,
+      target_user_id INTEGER,
+      institution_id INTEGER,
+      metadata_json TEXT NOT NULL DEFAULT '{}',
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (actor_user_id) REFERENCES users(id) ON DELETE SET NULL,
+      FOREIGN KEY (target_user_id) REFERENCES users(id) ON DELETE SET NULL,
+      FOREIGN KEY (institution_id) REFERENCES institutions(id) ON DELETE SET NULL
+    );
+
     CREATE TABLE IF NOT EXISTS responses (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       institution_id INTEGER NOT NULL,
@@ -129,6 +202,13 @@ function runMigrations(db) {
     }
     if (!columnNames.has('two_fa_enabled')) {
         db.exec(`ALTER TABLE users ADD COLUMN two_fa_enabled INTEGER NOT NULL DEFAULT 0;`);
+    }
+    const sessionColumns = db
+        .prepare(`PRAGMA table_info(auth_sessions)`)
+        .all();
+    const sessionColNames = new Set(sessionColumns.map((c) => c.name));
+    if (!sessionColNames.has('last_seen_at')) {
+        db.exec(`ALTER TABLE auth_sessions ADD COLUMN last_seen_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP;`);
     }
     const institutionColumns = db
         .prepare(`PRAGMA table_info(institutions)`)
@@ -173,6 +253,18 @@ function runMigrations(db) {
     if (!respColNames.has('kiosk_session_id')) {
         db.exec(`ALTER TABLE responses ADD COLUMN kiosk_session_id INTEGER REFERENCES kiosk_sessions(id) ON DELETE SET NULL;`);
     }
+    const auditColumns = db
+        .prepare(`PRAGMA table_info(audit_events)`)
+        .all();
+    const auditColNames = new Set(auditColumns.map((c) => c.name));
+    if (!auditColNames.has('audit_id')) {
+        db.exec(`ALTER TABLE audit_events ADD COLUMN audit_id TEXT;`);
+    }
+    db.exec(`
+    UPDATE audit_events
+    SET audit_id = 'legacy-' || id
+    WHERE audit_id IS NULL OR audit_id = '';
+  `);
     db.exec(`
     DELETE FROM responses
     WHERE kiosk_session_id IS NOT NULL
@@ -189,6 +281,14 @@ function runMigrations(db) {
 
     CREATE INDEX IF NOT EXISTS idx_login_challenges_email_method_active
       ON login_challenges (email, method, consumed_at, expires_at, created_at);
+    CREATE INDEX IF NOT EXISTS idx_login_attempts_email_ip_created
+      ON login_attempts (email, ip, created_at);
+    CREATE INDEX IF NOT EXISTS idx_audit_events_action_created
+      ON audit_events (action, created_at);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_audit_events_audit_id
+      ON audit_events (audit_id);
+
+    INSERT OR IGNORE INTO schema_migrations (version) VALUES (${currentSchemaVersion});
   `);
 }
 function seedInstitution(db) {
@@ -245,11 +345,13 @@ export function getDb() {
         return database;
     }
     mkdirSync(path.dirname(config.databasePath), { recursive: true });
-    const db = new Database(config.databasePath);
+    const db = openEncryptedDatabase(config.databasePath);
     db.pragma('journal_mode = WAL');
     runMigrations(db);
     const institution = seedInstitution(db);
-    seedUsers(db, institution.id);
+    if (!config.isProduction) {
+        seedUsers(db, institution.id);
+    }
     seedQuestionTemplates(db, institution.id);
     seedSmtpSettings(db);
     database = db;

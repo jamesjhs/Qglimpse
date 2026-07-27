@@ -2,7 +2,7 @@
   "name": "quickglimpse",
   "private": true,
   "version": "0.3.1",
-  "description": "Quick Glimpse foundation scaffold for institution visitor insights.",
+  "description": "Qglimpse foundation scaffold for institution visitor insights.",
   "workspaces": [
     "packages/*"
   ],
@@ -10,6 +10,7 @@
     "build": "npm run build --workspace @quickglimpse/web && npm run build --workspace @quickglimpse/server",
     "lint": "npm run lint --workspace @quickglimpse/web && npm run lint --workspace @quickglimpse/server",
     "test": "npm run test --workspace @quickglimpse/server",
+    "audit:deps": "npm audit --workspaces --audit-level=high",
     "start": "npm run start --workspace @quickglimpse/server",
     "dev": "npm run dev --workspace @quickglimpse/server",
     "admin:init": "npm run create-initial-admin --workspace @quickglimpse/server"
@@ -18,6 +19,6 @@
     "node": ">=20.18"
   },
   "allowScripts": {
-    "better-sqlite3@12.11.1": true
+    "better-sqlite3-multiple-ciphers@12.11.1": true
   }
 }

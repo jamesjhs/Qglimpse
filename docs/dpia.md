@@ -1,8 +1,8 @@
-# Quick Glimpse DPIA (Data Protection Impact Assessment) Summary
+# Qglimpse DPIA (Data Protection Impact Assessment) Summary
 
 ## Processing description
 
-Quick Glimpse collects anonymous visitor feedback and optional demographic categories, then presents institution-level analytics and privileged aggregate platform metrics.
+Qglimpse collects anonymous visitor feedback and optional demographic categories, then presents institution-level analytics and privileged aggregate platform metrics.
 
 ## Necessity and proportionality
 
@@ -16,6 +16,8 @@ Quick Glimpse collects anonymous visitor feedback and optional demographic categ
 - Survey response data (question key, answer value, timestamp, kiosk session linkage).
 - Optional demographic category selections.
 
+Banned guest fields include names, contact details, exact dates of birth, national identifiers, patient/student/customer IDs, appointment IDs, payment details, precise geolocation, media, biometrics, diagnosis details, and prompts designed to collect direct identifiers. IP addresses and raw user-agent strings must not be stored with guest feedback.
+
 ## Key risks considered
 
 - Unauthorized access to institution data.
@@ -26,9 +28,13 @@ Quick Glimpse collects anonymous visitor feedback and optional demographic categ
 
 - Authenticated bearer sessions with expiry and revocation.
 - Turnstile verification on registration/login.
-- Optional OTP and magic-link login challenge support.
+- SMTP-delivered OTP and magic-link login challenge support.
+- Session rotation, revocation, absolute expiry, and idle-timeout enforcement.
+- Audit events for login, logout, failed login, password reset, 2FA changes, account status changes, and privileged administration.
 - Cross-tab privacy guardrail for low counts (`< 5` masking).
 - Secure response headers and API no-store policy.
+- 90-day default retention for raw feedback, kiosk sessions, QR tokens, demographic payloads, and direct analytics inputs.
+- Encrypted backups with the same 90-day default retention expectation and retention cleanup after restore.
 - Operational hardening guidance in `docs/production-hardening.md`.
 
 ## Residual risk

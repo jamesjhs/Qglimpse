@@ -1,13 +1,16 @@
 import { existsSync, mkdirSync, readFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import path from 'node:path';
 const repoRoot = path.resolve(import.meta.dirname, '../../..');
 const packageJsonPath = path.join(repoRoot, 'package.json');
 const envPath = path.join(repoRoot, '.env');
 const envExamplePath = path.join(repoRoot, '.env.example');
+const nodeEnv = process.env.NODE_ENV?.trim() || 'development';
+const isProduction = nodeEnv === 'production';
 if (existsSync(envPath)) {
     process.loadEnvFile(envPath);
 }
-else if (existsSync(envExamplePath)) {
+else if (!isProduction && existsSync(envExamplePath)) {
     process.loadEnvFile(envExamplePath);
 }
 function requireEnv(name) {
@@ -52,35 +55,108 @@ function parseTrustProxyEnv() {
     }
     throw new Error('Environment variable QUICKGLIMPSE_TRUST_PROXY must be false, true, or a non-negative integer.');
 }
+function optionalEnv(name) {
+    const value = process.env[name]?.trim();
+    return value || undefined;
+}
+function requireProductionEnv(name) {
+    return isProduction ? requireEnv(name) : (optionalEnv(name) ?? '');
+}
+function assertNotPlaceholder(name, value, placeholders) {
+    if (placeholders.includes(value)) {
+        throw new Error(`Environment variable ${name} must not use a placeholder value in production.`);
+    }
+}
+function validateProductionConfig(input) {
+    if (!isProduction) {
+        return;
+    }
+    const parsedBaseUrl = new URL(input.baseUrl);
+    if (parsedBaseUrl.protocol !== 'https:') {
+        throw new Error('QUICKGLIMPSE_BASE_URL must use https:// in production.');
+    }
+    if (['localhost', '127.0.0.1', '::1'].includes(parsedBaseUrl.hostname)) {
+        throw new Error('QUICKGLIMPSE_BASE_URL must not point at localhost in production.');
+    }
+    if (input.trustProxy === false || input.trustProxy === 0) {
+        throw new Error('QUICKGLIMPSE_TRUST_PROXY must trust the Cloudflare/reverse-proxy hop in production.');
+    }
+    if (input.databaseEncryptionKey.length < 32) {
+        throw new Error('QUICKGLIMPSE_DB_ENCRYPTION_KEY must be at least 32 characters in production.');
+    }
+    assertNotPlaceholder('QUICKGLIMPSE_DB_ENCRYPTION_KEY', input.databaseEncryptionKey, [
+        'change-me-db-key',
+        'changeme',
+    ]);
+    if (input.sessionSecret.length < 32) {
+        throw new Error('QUICKGLIMPSE_SESSION_SECRET must be at least 32 characters in production.');
+    }
+    assertNotPlaceholder('QUICKGLIMPSE_SESSION_SECRET', input.sessionSecret, ['change-me-session-secret', 'changeme']);
+    if (input.sessionTtlMs <= 0 || input.sessionTtlMs > 7 * 24 * 60 * 60 * 1000) {
+        throw new Error('QUICKGLIMPSE_SESSION_TTL_MS must be between 1 ms and 7 days in production.');
+    }
+    if (input.sessionIdleTtlMs <= 0 || input.sessionIdleTtlMs > input.sessionTtlMs) {
+        throw new Error('QUICKGLIMPSE_SESSION_IDLE_TTL_MS must be positive and no greater than QUICKGLIMPSE_SESSION_TTL_MS in production.');
+    }
+    if (!input.turnstile.siteKey || !input.turnstile.secretKey) {
+        throw new Error('TURNSTILE_SITE_KEY and TURNSTILE_SECRET_KEY are required in production.');
+    }
+    for (const [name, value] of Object.entries(input.smtpSeed)) {
+        if (name === 'port') {
+            continue;
+        }
+        if (!String(value).trim()) {
+            throw new Error(`SMTP_${name.replace(/[A-Z]/g, (char) => `_${char}`).toUpperCase()} is required in production.`);
+        }
+    }
+    if (input.smtpSeed.secureLoginType === 'none') {
+        throw new Error('SMTP_SECURE_LOGIN_TYPE must be ssl or starttls in production.');
+    }
+}
 const dataDir = process.env.QUICKGLIMPSE_DATA_DIR
     ? path.resolve(process.env.QUICKGLIMPSE_DATA_DIR)
     : path.join(repoRoot, '.data');
 mkdirSync(dataDir, { recursive: true });
+const databaseEncryptionKey = requireEnv('QUICKGLIMPSE_DB_ENCRYPTION_KEY');
+const sessionSecret = isProduction
+    ? requireEnv('QUICKGLIMPSE_SESSION_SECRET')
+    : (optionalEnv('QUICKGLIMPSE_SESSION_SECRET') ??
+        createHash('sha256').update(`${repoRoot}:qglimpse-development-session-secret`).digest('hex'));
+const sessionTtlMs = requireIntegerEnv('QUICKGLIMPSE_SESSION_TTL_MS');
+const sessionIdleTtlMs = process.env.QUICKGLIMPSE_SESSION_IDLE_TTL_MS
+    ? requireIntegerEnv('QUICKGLIMPSE_SESSION_IDLE_TTL_MS')
+    : Math.min(sessionTtlMs, 30 * 60 * 1000);
+const smtpSeed = {
+    username: requireProductionEnv('SMTP_USERNAME'),
+    password: requireProductionEnv('SMTP_PASSWORD'),
+    sendAddress: requireProductionEnv('SMTP_SEND_ADDRESS'),
+    serverAddress: requireProductionEnv('SMTP_SERVER_ADDRESS'),
+    port: requireIntegerEnv('SMTP_PORT'),
+    secureLoginType: requireSmtpSecureLoginType(),
+};
+const turnstile = {
+    siteKey: requireProductionEnv('TURNSTILE_SITE_KEY'),
+    secretKey: requireProductionEnv('TURNSTILE_SECRET_KEY'),
+};
 export const config = {
-    appName: 'Quick Glimpse',
+    appName: 'Qglimpse',
     version: readAppVersion(),
+    nodeEnv,
+    isProduction,
     port: requireIntegerEnv('PORT'),
     baseUrl: requireEnv('QUICKGLIMPSE_BASE_URL'),
     trustProxy: parseTrustProxyEnv(),
     dataDir,
     databasePath: requireEnv('QUICKGLIMPSE_DB_PATH'),
-    databaseEncryptionKey: requireEnv('QUICKGLIMPSE_DB_ENCRYPTION_KEY'),
-    sessionTtlMs: requireIntegerEnv('QUICKGLIMPSE_SESSION_TTL_MS'),
-    smtpSeed: {
-        username: process.env.SMTP_USERNAME ?? '',
-        password: process.env.SMTP_PASSWORD ?? '',
-        sendAddress: process.env.SMTP_SEND_ADDRESS ?? '',
-        serverAddress: process.env.SMTP_SERVER_ADDRESS ?? '',
-        port: requireIntegerEnv('SMTP_PORT'),
-        secureLoginType: requireSmtpSecureLoginType(),
-    },
-    turnstile: {
-        siteKey: process.env.TURNSTILE_SITE_KEY ?? '',
-        secretKey: process.env.TURNSTILE_SECRET_KEY ?? '',
-        devBypassToken: 'dev-turnstile-pass',
-    },
+    databaseEncryptionKey,
+    sessionSecret,
+    sessionTtlMs,
+    sessionIdleTtlMs,
+    smtpSeed,
+    turnstile,
     seedCredentials: {
-        rootPassword: requireEnv('QUICKGLIMPSE_ROOT_SEED_PASSWORD'),
-        institutionAdminPassword: requireEnv('QUICKGLIMPSE_INSTITUTION_SEED_PASSWORD'),
+        rootPassword: isProduction ? '' : requireEnv('QUICKGLIMPSE_ROOT_SEED_PASSWORD'),
+        institutionAdminPassword: isProduction ? '' : requireEnv('QUICKGLIMPSE_INSTITUTION_SEED_PASSWORD'),
     },
 };
+validateProductionConfig(config);

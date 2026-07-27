@@ -18,10 +18,13 @@ Copy `.env.example` to `.env`, then set your own deployment values.
 | `QUICKGLIMPSE_TRUST_PROXY` | Express trusted proxy setting. Use `1` behind one trusted reverse proxy that sets `X-Forwarded-For`; leave `false` for direct/local use |
 | `QUICKGLIMPSE_DATA_DIR` | Directory where SQLite data files are stored |
 | `QUICKGLIMPSE_DB_PATH` | Full path to the SQLite database file |
-| `QUICKGLIMPSE_DB_ENCRYPTION_KEY` | Database encryption key value for deployment environments |
+| `QUICKGLIMPSE_DB_ENCRYPTION_KEY` | SQLCipher database encryption key. Use at least 32 random characters in production |
+| `QUICKGLIMPSE_SESSION_SECRET` | HMAC secret for stored bearer-session token hashes. Required in production; use at least 32 random characters |
 | `QUICKGLIMPSE_SESSION_TTL_MS` | Session token lifetime in milliseconds |
-| `QUICKGLIMPSE_ROOT_SEED_PASSWORD` | Seed password for the seeded root/platform-admin account |
-| `QUICKGLIMPSE_INSTITUTION_SEED_PASSWORD` | Seed password for the seeded institution-admin account |
+| `QUICKGLIMPSE_SESSION_IDLE_TTL_MS` | Idle session timeout in milliseconds |
+| `QUICKGLIMPSE_EMAIL_DELIVERY_ENABLED` | Development-only override. Set to `true` only when you intentionally want local auth emails to send through configured SMTP |
+| `QUICKGLIMPSE_ROOT_SEED_PASSWORD` | Development-only seed password for the scaffold root account |
+| `QUICKGLIMPSE_INSTITUTION_SEED_PASSWORD` | Development-only seed password for the scaffold institution-admin account |
 | `TURNSTILE_SITE_KEY` | Cloudflare Turnstile site key for the browser widget; required in deployed environments |
 | `TURNSTILE_SECRET_KEY` | Cloudflare Turnstile secret key for server-side token verification; required in deployed environments |
 | `SMTP_USERNAME` | Initial SMTP username |
@@ -34,9 +37,21 @@ Copy `.env.example` to `.env`, then set your own deployment values.
 
 Create a Cloudflare Turnstile widget in the Cloudflare dashboard, then set `TURNSTILE_SITE_KEY` and `TURNSTILE_SECRET_KEY` in `.env`.
 
-When `TURNSTILE_SECRET_KEY` is empty, local development uses the built-in bypass token:
-- Turnstile checks accept `dev-turnstile-pass`.
-- Auth and shell rate limiters are disabled.
+When `TURNSTILE_SECRET_KEY` is empty, local development treats Turnstile as disabled and auth/shell rate limiters are disabled. Production requires real Turnstile keys.
+
+## Production fail-closed checks
+
+Set `NODE_ENV=production` for production starts. In production:
+
+- `.env.example` is never loaded as a fallback; real environment values or a real `.env` file must be present.
+- `QUICKGLIMPSE_BASE_URL` must be an `https://` URL and must not point at localhost.
+- `QUICKGLIMPSE_TRUST_PROXY` must trust the Cloudflare or reverse-proxy hop.
+- `QUICKGLIMPSE_DB_ENCRYPTION_KEY` and `QUICKGLIMPSE_SESSION_SECRET` must be non-placeholder values with at least 32 characters.
+- `TURNSTILE_SITE_KEY` and `TURNSTILE_SECRET_KEY` are required.
+- SMTP username, password, sender address, server address, port, and secure login mode are required; `SMTP_SECURE_LOGIN_TYPE=none` is rejected.
+- Seed credentials are not created. Use `npm run admin:init` to create the first root user.
+
+In non-production, auth email delivery is disabled unless `QUICKGLIMPSE_EMAIL_DELIVERY_ENABLED=true`. Tokens are still stored server-side and API responses remain generic; token values are not returned to the browser.
 
 ## First-run steps (bare Node)
 
@@ -58,16 +73,18 @@ npm start
 Open `http://localhost:3000` in a browser.  
 Health check: `http://localhost:3000/readyz`
 
-### Seed accounts (first run only)
+Docker is not a target deployment path for Qglimpse. Run the built Node server directly under PM2 or another approved host process manager.
+
+### Seed accounts (development scaffold only)
 
 | Email | Password | Role |
 |-------|----------|------|
-| `root@quickglimpse.local` | `ChangeMeRoot123!` | Platform admin (root) |
+| `root@quickglimpse.local` | `ChangeMeRoot123!` | Root user |
 | `institution-admin@quickglimpse.local` | `ChangeMeInstitution123!` | Institution admin |
 
-Change these passwords immediately after first login, or override them via the seed-password env vars before the first run.
+These accounts are for the current scaffold and local verification. Production setup must use the first-root-admin CLI flow and must not depend on seeded live credentials.
 
-### Configure initial platform admin from CLI
+### Configure initial root user from CLI
 
 ```bash
 npm run admin:init -- --email admin@example.com --password 'ChangeMeNow123!'
@@ -116,3 +133,16 @@ pm2 start ecosystem.config.cjs
 ```
 
 See [production-hardening.md](production-hardening.md) for the full deployment checklist.
+See [backup-restore.md](backup-restore.md) for encrypted backup and restore expectations.
+
+## Canonical public routes
+
+| Path | Purpose |
+|------|---------|
+| `/` | Public homepage |
+| `/login` | Account login for staff and kiosk users |
+| `/app` | Staff app after login |
+| `/kiosk/login` | Kiosk-device login for kiosk-only accounts |
+| `/guest/qr/:token` | Anonymous QR guest submission |
+
+The current scaffold does not yet implement every canonical route. Treat deviations as pre-production work, not alternate deployment guidance.

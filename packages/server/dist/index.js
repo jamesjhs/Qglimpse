@@ -3,13 +3,19 @@ import rateLimit from 'express-rate-limit';
 import path from 'node:path';
 import { existsSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
+import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { authenticateSession, changeRequiredPassword, changeOwnPassword, confirmPasswordReset, ensureInitialAdminLogin, ensureSeedCredentials, listUsers, loginUser, logoutSession, registerUser, toggle2FA, updateUserEmail, updateUserStatus, userRoles, userStatuses, verifyMagicLinkChallenge, verifyOtpChallenge, verifyTurnstileToken, } from './auth.js';
-import { buildBootstrapPayload, confirmEmailVerification, createCustomQuestion, createInstitution, createInstitutionUser, createLoginChallenge, deleteCustomQuestion, deleteInstitution, getInstitution, getInstitutionAnalytics, getInstitutionQuestions, getCrossTabulation, getKioskStatus, getRootOverview, getSmtpSettings, listInstitutions, listInstitutionUsers, listQuestionTemplates, requestEmailVerification, requestPasswordReset, sendTestSmtpEmail, setInstitutionColorScheme, startKioskSession, submitKioskAnswer, completeKioskSession, toggleInstitutionKioskMode, updateInstitution, updateInstitutionQuestion, updateSmtpSettings, } from './services.js';
+import { buildBootstrapPayload, confirmEmailVerification, createCustomQuestion, createInstitution, createInstitutionUser, createLoginChallenge, deleteCustomQuestion, deleteInstitution, getInstitution, getInstitutionAnalytics, getInstitutionQuestions, getCrossTabulation, getKioskStatus, getRootOverview, getSmtpSettings, listInstitutions, listInstitutionUsers, listQuestionTemplates, requestEmailVerification, requestPasswordReset, runRetentionCleanup, sendTestSmtpEmail, setInstitutionColorScheme, startKioskSession, submitKioskAnswer, completeKioskSession, toggleInstitutionKioskMode, updateInstitution, updateInstitutionQuestion, updateSmtpSettings, } from './services.js';
 import { config } from './config.js';
 import { getDb } from './db.js';
+import { sendOperationalEmail } from './mailer.js';
+import { recordAuditEvent } from './audit.js';
 getDb();
-ensureSeedCredentials();
+runRetentionCleanup();
+if (!config.isProduction) {
+    ensureSeedCredentials();
+}
 const kioskSchema = z.object({
     enabled: z.boolean(),
 });
@@ -30,19 +36,19 @@ const registerSchema = z.object({
     password: z.string().min(10),
     role: z.enum(userRoles).default('institution_user'),
     institutionId: z.number().int().nullable().default(null),
-    turnstileToken: z.string().min(1),
+    turnstileToken: z.string().default(''),
 });
 const loginSchema = z.object({
     email: z.string().email(),
     password: z.string().min(1),
-    turnstileToken: z.string().min(1),
+    turnstileToken: z.string().default(''),
 });
 const institutionInterestSchema = z.object({
     institutionName: z.string().trim().min(1).max(160),
     contactName: z.string().trim().min(1).max(120),
     email: z.string().email(),
     notes: z.string().trim().max(1000).default(''),
-    turnstileToken: z.string().min(1),
+    turnstileToken: z.string().default(''),
 });
 const updateUserStatusSchema = z.object({
     status: z.enum(userStatuses),
@@ -88,7 +94,7 @@ const institutionColorSchemeSchema = z.object({
 const createInstitutionUserSchema = z.object({
     email: z.string().email(),
     password: z.string().min(10),
-    role: z.enum(['institution_admin', 'institution_user']).default('institution_user'),
+    role: z.enum(['institution_admin', 'institution_user', 'institution_kiosk']).default('institution_user'),
 });
 const updateQuestionSchema = z.object({
     includeInKiosk: z.boolean().optional(),
@@ -145,6 +151,13 @@ const authCoreLimiter = rateLimit({
     standardHeaders: true,
     legacyHeaders: false,
 });
+const kioskRuntimeLimiter = rateLimit({
+    windowMs: 60 * 1000,
+    limit: 120,
+    skip: () => devMode,
+    standardHeaders: true,
+    legacyHeaders: false,
+});
 const spaShellLimiter = rateLimit({
     windowMs: 60 * 1000,
     limit: 240,
@@ -184,9 +197,46 @@ function parseNumericId(value) {
     }
     return parsed;
 }
+const sensitiveLogKeyPattern = /(authorization|cookie|password|pass|secret|token|otp|session|smtp|answer|demographic|encryption|credential)/i;
+export function redactForLog(value, key = '', seen = new WeakSet()) {
+    if (sensitiveLogKeyPattern.test(key)) {
+        return '[REDACTED]';
+    }
+    if (value instanceof Error) {
+        return {
+            name: value.name,
+            message: value.message,
+            stack: value.stack,
+        };
+    }
+    if (value === null || typeof value !== 'object') {
+        return value;
+    }
+    if (seen.has(value)) {
+        return '[Circular]';
+    }
+    seen.add(value);
+    if (Array.isArray(value)) {
+        return value.map((item) => redactForLog(item, key, seen));
+    }
+    const output = {};
+    for (const [entryKey, entryValue] of Object.entries(value)) {
+        output[entryKey] = redactForLog(entryValue, entryKey, seen);
+    }
+    return output;
+}
+function writeStructuredLog(level, message, details) {
+    const payload = {
+        timestamp: new Date().toISOString(),
+        level,
+        service: 'qglimpse-server',
+        message,
+        ...details,
+    };
+    console.error(JSON.stringify(redactForLog(payload)));
+}
 function logErrorSummary(message, details) {
-    console.error(`[${new Date().toISOString()}] ${message}`);
-    console.error(details);
+    writeStructuredLog('error', message, details);
 }
 function describeLoginPayload(body) {
     if (!body || typeof body !== 'object' || Array.isArray(body)) {
@@ -236,10 +286,26 @@ function getAuthenticatedSession(req, res) {
     }
     return { session, token };
 }
+function getRoleRedirectPath(role) {
+    if (role === 'institution_kiosk') {
+        return '/kiosk';
+    }
+    if (role === 'root') {
+        return '/root';
+    }
+    return '/app';
+}
 export function createApp() {
     const app = express();
     app.disable('x-powered-by');
     app.set('trust proxy', config.trustProxy);
+    app.use((req, res, next) => {
+        const incomingRequestId = req.header('x-request-id');
+        req.requestId =
+            incomingRequestId && /^[a-zA-Z0-9._:-]{8,128}$/.test(incomingRequestId) ? incomingRequestId : randomUUID();
+        res.setHeader('x-request-id', req.requestId);
+        next();
+    });
     app.use(express.json({ limit: '50kb' }));
     app.use((req, res, next) => {
         const startedAt = Date.now();
@@ -262,6 +328,7 @@ export function createApp() {
             logErrorSummary('HTTP request failed', {
                 method: req.method,
                 path: req.originalUrl,
+                requestId: req.requestId,
                 statusCode: res.statusCode,
                 durationMs: Date.now() - startedAt,
                 ip: req.ip,
@@ -274,7 +341,9 @@ export function createApp() {
     app.use((req, res, next) => {
         res.setHeader('x-content-type-options', 'nosniff');
         res.setHeader('x-frame-options', 'DENY');
+        res.setHeader('x-permitted-cross-domain-policies', 'none');
         res.setHeader('referrer-policy', 'no-referrer');
+        res.setHeader('origin-agent-cluster', '?1');
         res.setHeader('permissions-policy', 'camera=(), microphone=(), geolocation=()');
         res.setHeader('content-security-policy', "default-src 'self'; script-src 'self' https://challenges.cloudflare.com; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' https://challenges.cloudflare.com; frame-src 'self' https://challenges.cloudflare.com; child-src https://challenges.cloudflare.com; font-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'");
         res.setHeader('strict-transport-security', 'max-age=31536000; includeSubDomains');
@@ -285,6 +354,20 @@ export function createApp() {
             res.setHeader('x-robots-tag', 'noindex');
         }
         next();
+    });
+    app.use((req, res, next) => {
+        if (!/^\/api\/(root|settings|institutions|question-templates)(\/|$)/.test(req.path)) {
+            return next();
+        }
+        const token = extractBearerToken(req.header('authorization'));
+        if (!token) {
+            return next();
+        }
+        const session = authenticateSession(token);
+        if (session?.user.role === 'institution_kiosk') {
+            return res.status(403).json({ error: 'Kiosk accounts cannot access staff routes.' });
+        }
+        return next();
     });
     app.get('/readyz', (_req, res) => {
         res.json({ status: 'ok', version: config.version, timestamp: new Date().toISOString() });
@@ -324,7 +407,9 @@ export function createApp() {
         if (!parsed.success) {
             return res.status(400).json({ error: 'Invalid SMTP settings payload.' });
         }
-        return res.json(updateSmtpSettings(parsed.data));
+        const settings = updateSmtpSettings(parsed.data);
+        recordAuditEvent({ action: 'smtp_settings_updated', actor: auth.session.user });
+        return res.json(settings);
     });
     app.post('/api/institutions/:id/kiosk-mode', privilegedOpsLimiter, (req, res) => {
         const auth = getAuthenticatedSession(req, res);
@@ -349,6 +434,12 @@ export function createApp() {
         if (!institution) {
             return res.status(404).json({ error: 'Institution not found.' });
         }
+        recordAuditEvent({
+            action: 'institution_kiosk_mode_changed',
+            actor: auth.session.user,
+            institutionId,
+            metadata: { enabled: parsed.data.enabled },
+        });
         return res.json(institution);
     });
     app.post('/api/institutions/:id/color-scheme', privilegedOpsLimiter, (req, res) => {
@@ -375,6 +466,12 @@ export function createApp() {
             if (!institution) {
                 return res.status(404).json({ error: 'Institution not found.' });
             }
+            recordAuditEvent({
+                action: 'institution_updated',
+                actor: auth.session.user,
+                institutionId,
+                metadata: { colorScheme: parsed.data.colorScheme },
+            });
             return res.json(institution);
         }
         catch (error) {
@@ -387,7 +484,6 @@ export function createApp() {
         res.json({
             siteKey: config.turnstile.siteKey,
             requiresRemoteValidation: Boolean(config.turnstile.secretKey),
-            devBypassTokenHint: config.turnstile.secretKey ? null : config.turnstile.devBypassToken,
         });
     });
     app.post('/api/institution-interest', authCoreLimiter, async (req, res) => {
@@ -444,8 +540,21 @@ export function createApp() {
             const session = loginUser({
                 email: parsed.data.email,
                 password: parsed.data.password,
+                ip: req.ip,
             });
-            return res.status(200).json(session);
+            if ('challengePending' in session) {
+                await sendOperationalEmail({
+                    to: session.email,
+                    subject: 'Your Qglimpse sign-in code',
+                    text: `Your Qglimpse sign-in code is ${session.delivery.otpCode}. It expires in 10 minutes.`,
+                });
+                return res.status(200).json({
+                    challengePending: true,
+                    email: session.email,
+                    expiresAt: session.expiresAt,
+                });
+            }
+            return res.status(200).json({ ...session, redirectPath: getRoleRedirectPath(session.user.role) });
         }
         catch (error) {
             return res.status(401).json({ error: error instanceof Error ? error.message : 'Login failed.' });
@@ -456,7 +565,7 @@ export function createApp() {
         if (!auth) {
             return;
         }
-        return res.json(auth.session);
+        return res.json({ ...auth.session, redirectPath: getRoleRedirectPath(auth.session.user.role) });
     });
     app.post('/api/auth/logout', authCoreLimiter, (req, res) => {
         const auth = getAuthenticatedSession(req, res);
@@ -494,18 +603,25 @@ export function createApp() {
         }
         try {
             const user = updateUserStatus(userId, parsed.data.status);
+            recordAuditEvent({
+                action: 'user_status_changed',
+                actor: auth.session.user,
+                targetUserId: user.id,
+                institutionId: user.institutionId,
+                metadata: { status: parsed.data.status },
+            });
             return res.json({ user });
         }
         catch (error) {
             return res.status(400).json({ error: error instanceof Error ? error.message : 'Unable to update user status.' });
         }
     });
-    app.post('/api/auth/challenges', authChallengeLimiter, (req, res) => {
+    app.post('/api/auth/challenges', authChallengeLimiter, async (req, res) => {
         const parsed = loginChallengeSchema.safeParse(req.body);
         if (!parsed.success) {
             return res.status(400).json({ error: 'Invalid login challenge request.' });
         }
-        createLoginChallenge(parsed.data.email, parsed.data.method);
+        await createLoginChallenge(parsed.data.email, parsed.data.method);
         return res.status(202).json({ accepted: true });
     });
     app.post('/api/auth/challenges/verify', authChallengeLimiter, (req, res) => {
@@ -515,7 +631,7 @@ export function createApp() {
         }
         try {
             const session = verifyOtpChallenge(parsed.data.email, parsed.data.code);
-            return res.json(session);
+            return res.json({ ...session, redirectPath: getRoleRedirectPath(session.user.role) });
         }
         catch (error) {
             return res.status(401).json({ error: error instanceof Error ? error.message : 'Verification failed.' });
@@ -528,7 +644,7 @@ export function createApp() {
         }
         try {
             const session = verifyMagicLinkChallenge(token);
-            return res.json(session);
+            return res.json({ ...session, redirectPath: getRoleRedirectPath(session.user.role) });
         }
         catch (error) {
             return res.status(401).json({ error: error instanceof Error ? error.message : 'Magic link verification failed.' });
@@ -606,7 +722,7 @@ export function createApp() {
             return res.status(400).json({ error: 'Invalid password reset request.' });
         }
         const startedAt = Date.now();
-        requestPasswordReset(parsed.data.email);
+        await requestPasswordReset(parsed.data.email);
         await enforceMinResponseTime(startedAt, 150);
         return res.status(202).json({ accepted: true });
     });
@@ -617,20 +733,21 @@ export function createApp() {
         }
         try {
             confirmPasswordReset(parsed.data.token, parsed.data.newPassword);
+            recordAuditEvent({ action: 'password_reset_completed' });
             return res.json({ success: true });
         }
         catch (error) {
             return res.status(401).json({ error: error instanceof Error ? error.message : 'Password reset failed.' });
         }
     });
-    app.post('/api/auth/email-verify/request', authCoreLimiter, (req, res) => {
+    app.post('/api/auth/email-verify/request', authCoreLimiter, async (req, res) => {
         const auth = getAuthenticatedSession(req, res);
         if (!auth) {
             return;
         }
         try {
-            const result = requestEmailVerification(auth.session.user.id);
-            return res.status(201).json(result);
+            await requestEmailVerification(auth.session.user.id);
+            return res.status(202).json({ accepted: true });
         }
         catch (error) {
             return res.status(400).json({ error: error instanceof Error ? error.message : 'Unable to request verification.' });
@@ -674,6 +791,7 @@ export function createApp() {
         try {
             const slug = parsed.data.slug ?? parsed.data.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
             const institution = createInstitution({ ...parsed.data, slug });
+            recordAuditEvent({ action: 'institution_created', actor: auth.session.user, institutionId: institution.id });
             return res.status(201).json(institution);
         }
         catch (error) {
@@ -714,6 +832,7 @@ export function createApp() {
         try {
             const slug = parsed.data.slug ?? parsed.data.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
             const institution = updateInstitution(institutionId, { ...parsed.data, slug });
+            recordAuditEvent({ action: 'institution_updated', actor: auth.session.user, institutionId });
             return res.json(institution);
         }
         catch (error) {
@@ -736,6 +855,7 @@ export function createApp() {
         }
         try {
             deleteInstitution(institutionId);
+            recordAuditEvent({ action: 'institution_deleted', actor: auth.session.user, institutionId });
             return res.status(204).send();
         }
         catch (error) {
@@ -782,6 +902,13 @@ export function createApp() {
         }
         try {
             const user = createInstitutionUser(institutionId, parsed.data);
+            recordAuditEvent({
+                action: 'user_status_changed',
+                actor: auth.session.user,
+                targetUserId: user.id,
+                institutionId,
+                metadata: { created: true, role: user.role },
+            });
             return res.status(201).json({ ...user, mustChangePassword: true });
         }
         catch (error) {
@@ -822,6 +949,7 @@ export function createApp() {
             return res.status(400).json({ error: 'Invalid question update payload.' });
         try {
             const question = updateInstitutionQuestion(institutionId, questionId, parsed.data);
+            recordAuditEvent({ action: 'question_updated', actor: auth.session.user, institutionId, metadata: { questionId } });
             return res.json(question);
         }
         catch (error) {
@@ -846,6 +974,12 @@ export function createApp() {
             return res.status(400).json({ error: 'Invalid question payload.' });
         try {
             const question = createCustomQuestion(institutionId, parsed.data);
+            recordAuditEvent({
+                action: 'question_created',
+                actor: auth.session.user,
+                institutionId,
+                metadata: { questionId: question?.id },
+            });
             return res.status(201).json(question);
         }
         catch (error) {
@@ -868,6 +1002,7 @@ export function createApp() {
         }
         try {
             deleteCustomQuestion(institutionId, questionId);
+            recordAuditEvent({ action: 'question_deleted', actor: auth.session.user, institutionId, metadata: { questionId } });
             return res.status(204).send();
         }
         catch (error) {
@@ -923,13 +1058,22 @@ export function createApp() {
             return res.status(404).json({ error: 'Institution not found.' });
         return res.json(status);
     });
-    app.post('/api/kiosk/:slug/session', authChallengeLimiter, (req, res) => {
+    app.post('/api/kiosk/:slug/session', kioskRuntimeLimiter, (req, res) => {
+        const auth = getAuthenticatedSession(req, res);
+        if (!auth)
+            return;
+        if (auth.session.user.role !== 'institution_kiosk') {
+            return res.status(403).json({ error: 'Kiosk account required.' });
+        }
         const slug = Array.isArray(req.params.slug) ? req.params.slug[0] : req.params.slug;
         if (!slug)
             return res.status(400).json({ error: 'Invalid slug.' });
         const status = getKioskStatus(slug);
         if (!status)
             return res.status(404).json({ error: 'Institution not found.' });
+        if (auth.session.user.institutionId !== status.institutionId) {
+            return res.status(403).json({ error: 'Institution-scoped access required.' });
+        }
         try {
             const session = startKioskSession(status.institutionId);
             return res.status(201).json(session);
@@ -938,7 +1082,7 @@ export function createApp() {
             return res.status(403).json({ error: error instanceof Error ? error.message : 'Unable to start kiosk session.' });
         }
     });
-    app.post('/api/kiosk/answer', authChallengeLimiter, (req, res) => {
+    app.post('/api/kiosk/answer', kioskRuntimeLimiter, (req, res) => {
         const parsed = kioskAnswerSchema.safeParse(req.body);
         if (!parsed.success)
             return res.status(400).json({ error: 'Invalid answer payload.' });
@@ -950,7 +1094,7 @@ export function createApp() {
             return res.status(400).json({ error: error instanceof Error ? error.message : 'Unable to record answer.' });
         }
     });
-    app.post('/api/kiosk/complete', authChallengeLimiter, (req, res) => {
+    app.post('/api/kiosk/complete', kioskRuntimeLimiter, (req, res) => {
         const parsed = kioskCompleteSchema.safeParse(req.body);
         if (!parsed.success)
             return res.status(400).json({ error: 'Invalid complete payload.' });
@@ -968,6 +1112,21 @@ export function createApp() {
             return;
         return res.json({ templates: listQuestionTemplates() });
     });
+    app.get('/api/institutions/:id/export', privilegedOpsLimiter, (req, res) => {
+        const auth = getAuthenticatedSession(req, res);
+        if (!auth)
+            return;
+        if (!['root', 'institution_admin'].includes(auth.session.user.role)) {
+            return res.status(403).json({ error: 'Export permission required.' });
+        }
+        const institutionId = parseNumericId(req.params.id);
+        if (!institutionId)
+            return res.status(400).json({ error: 'Invalid institution id.' });
+        if (auth.session.user.role === 'institution_admin' && auth.session.user.institutionId !== institutionId) {
+            return res.status(403).json({ error: 'Institution-scoped export required.' });
+        }
+        return res.status(501).json({ error: 'Exports are not implemented for this release.' });
+    });
     app.post('/api/settings/smtp/test', privilegedOpsLimiter, async (req, res) => {
         const auth = getAuthenticatedSession(req, res);
         if (!auth)
@@ -980,6 +1139,7 @@ export function createApp() {
             return res.status(400).json({ error: 'Invalid test email payload.' });
         try {
             const result = await sendTestSmtpEmail(parsed.data.toAddress);
+            recordAuditEvent({ action: 'smtp_test_sent', actor: auth.session.user });
             return res.json(result);
         }
         catch (error) {
@@ -990,6 +1150,9 @@ export function createApp() {
     app.get('/auth/magic-link', (req, res) => {
         const token = typeof req.query.token === 'string' ? encodeURIComponent(req.query.token) : '';
         res.redirect(`/magic-link?token=${token}`);
+    });
+    app.use('/api', (_req, res) => {
+        res.status(404).json({ error: 'API route not found.' });
     });
     if (existsSync(webDistPath)) {
         app.use(express.static(webDistPath));
@@ -1002,7 +1165,7 @@ export function createApp() {
             res.type('html').send(`
         <html>
           <body style="font-family: sans-serif; padding: 2rem;">
-            <h1>Quick Glimpse server is running</h1>
+            <h1>Qglimpse server is running</h1>
             <p>The web bundle has not been built yet. Run <code>npm run build</code> from the repository root.</p>
           </body>
         </html>
@@ -1013,6 +1176,7 @@ export function createApp() {
         logErrorSummary('Unhandled route error', {
             method: req.method,
             path: req.originalUrl,
+            requestId: req.requestId,
             ip: req.ip,
             errorName: error instanceof Error ? error.name : null,
             errorMessage: error instanceof Error ? error.message : String(error),
@@ -1116,7 +1280,7 @@ if (isDirectRun) {
         });
         const app = createApp();
         app.listen(config.port, () => {
-            console.log(`Quick Glimpse listening on ${config.baseUrl}`);
+            console.log(`Qglimpse listening on ${config.baseUrl}`);
         });
     }
 }

@@ -2,6 +2,8 @@ import { createHash, randomBytes, randomInt } from 'node:crypto'
 import { getDb } from './db.js'
 import { authMethodOptions, demographicsTemplates, insightTemplates, foundationChecklist } from './data/demographics.js'
 import { config } from './config.js'
+import { sendOperationalEmail } from './mailer.js'
+import { recordAuditEvent } from './audit.js'
 import {
   registerUser,
   userStatuses,
@@ -146,7 +148,7 @@ export function toggleInstitutionKioskMode(id: number, enabled: boolean) {
     .get(id)
 }
 
-export function createLoginChallenge(email: string, method: 'email_code' | 'magic_link') {
+export async function createLoginChallenge(email: string, method: 'email_code' | 'magic_link') {
   const db = getDb()
   const normalizedEmail = normalizeEmail(email)
   const expiresAt = new Date(Date.now() + 10 * 60 * 1000).toISOString()
@@ -181,18 +183,29 @@ export function createLoginChallenge(email: string, method: 'email_code' | 'magi
     )
   })()
 
+  if (method === 'email_code' && otpCode) {
+    await sendOperationalEmail({
+      to: normalizedEmail,
+      subject: 'Your Qglimpse sign-in code',
+      text: `Your Qglimpse sign-in code is ${otpCode}. It expires in 10 minutes.`,
+    })
+  } else if (method === 'magic_link' && magicToken) {
+    const magicLink = `${config.baseUrl}/auth/magic-link?token=${encodeURIComponent(magicToken)}`
+    await sendOperationalEmail({
+      to: normalizedEmail,
+      subject: 'Your Qglimpse sign-in link',
+      text: `Open this single-use Qglimpse sign-in link within 10 minutes: ${magicLink}`,
+    })
+  }
+
   return {
     email: normalizedEmail,
     method,
     expiresAt,
-    preview:
-      method === 'email_code'
-        ? { otpCode }
-        : { magicLink: `${config.baseUrl}/auth/magic-link?token=${encodeURIComponent(magicToken ?? '')}` },
   }
 }
 
-export function requestPasswordReset(email: string) {
+export async function requestPasswordReset(email: string) {
   const db = getDb()
   db.prepare(
     `DELETE FROM login_challenges
@@ -200,7 +213,8 @@ export function requestPasswordReset(email: string) {
         AND (datetime(expires_at) < datetime('now', '-1 day') OR consumed_at IS NOT NULL)`,
   ).run()
   const normalizedEmail = email.trim().toLowerCase()
-  const tokenHash = createHash('sha256').update(randomBytes(24).toString('base64url')).digest('hex')
+  const rawToken = randomBytes(24).toString('base64url')
+  const tokenHash = createHash('sha256').update(rawToken).digest('hex')
   const user = db.prepare('SELECT id FROM users WHERE email = ?').get(normalizedEmail) as { id: number } | undefined
   if (!user) {
     db.prepare(`SELECT COUNT(*) AS count FROM login_challenges WHERE email = ? AND method = 'password_reset'`).get(
@@ -212,10 +226,17 @@ export function requestPasswordReset(email: string) {
   db.prepare(
     `INSERT INTO login_challenges (email, method, magic_token_hash, expires_at) VALUES (?, ?, ?, ?)`,
   ).run(normalizedEmail, 'password_reset', tokenHash, expiresAt)
+  const resetLink = `${config.baseUrl}/password-reset?token=${encodeURIComponent(rawToken)}`
+  await sendOperationalEmail({
+    to: normalizedEmail,
+    subject: 'Reset your Qglimpse password',
+    text: `Open this single-use Qglimpse password reset link within 1 hour: ${resetLink}`,
+  })
+  recordAuditEvent({ action: 'password_reset_requested', targetUserId: user.id })
   return { accepted: true }
 }
 
-export function requestEmailVerification(userId: number) {
+export async function requestEmailVerification(userId: number) {
   const db = getDb()
   const user = db.prepare('SELECT email FROM users WHERE id = ?').get(userId) as { email: string } | undefined
   if (!user) {
@@ -231,7 +252,14 @@ export function requestEmailVerification(userId: number) {
   db.prepare(
     `INSERT INTO login_challenges (email, method, magic_token_hash, expires_at) VALUES (?, ?, ?, ?)`,
   ).run(user.email, 'email_verify', createHash('sha256').update(rawToken).digest('hex'), expiresAt)
-  return { previewToken: rawToken }
+  const verificationLink = `${config.baseUrl}/email-verify?token=${encodeURIComponent(rawToken)}`
+  await sendOperationalEmail({
+    to: user.email,
+    subject: 'Verify your Qglimpse email address',
+    text: `Open this single-use Qglimpse email verification link within 24 hours: ${verificationLink}`,
+  })
+  recordAuditEvent({ action: 'email_verification_requested', targetUserId: userId })
+  return { accepted: true }
 }
 
 export function confirmEmailVerification(token: string) {
@@ -251,6 +279,7 @@ export function confirmEmailVerification(token: string) {
   }
   db.prepare('UPDATE users SET email_verified = 1 WHERE email = ?').run(challenge.email)
   db.prepare('UPDATE login_challenges SET consumed_at = CURRENT_TIMESTAMP WHERE id = ?').run(challenge.id)
+  recordAuditEvent({ action: 'email_verification_completed', metadata: { email: challenge.email } })
 }
 
 export function createInstitution(input: { name: string; slug: string; timezone: string; colorScheme?: string }) {
@@ -737,6 +766,38 @@ export function completeKioskSession(sessionToken: string, demographicData: Reco
   return { completed: true }
 }
 
+export function runRetentionCleanup(retentionDays = 90) {
+  if (!Number.isInteger(retentionDays) || retentionDays < 1 || retentionDays > 90) {
+    throw new Error('Retention cleanup requires a retention window from 1 to 90 days.')
+  }
+
+  const db = getDb()
+  return db.transaction(() => {
+    const cutoffModifier = `-${retentionDays} days`
+    const responses = db
+      .prepare(`DELETE FROM responses WHERE datetime(created_at) < datetime('now', ?)`)
+      .run(cutoffModifier).changes
+    const kioskSessions = db
+      .prepare(`DELETE FROM kiosk_sessions WHERE datetime(started_at) < datetime('now', ?)`)
+      .run(cutoffModifier).changes
+    const loginChallenges = db
+      .prepare(
+        `DELETE FROM login_challenges
+         WHERE consumed_at IS NOT NULL
+            OR datetime(expires_at) < datetime('now')
+            OR datetime(created_at) < datetime('now', ?)`,
+      )
+      .run(cutoffModifier).changes
+
+    return {
+      retentionDays,
+      responses,
+      kioskSessions,
+      loginChallenges,
+    }
+  })()
+}
+
 export function getInstitutionAnalytics(institutionId: number, options: { from?: string; to?: string } = {}) {
   const db = getDb()
 
@@ -834,7 +895,7 @@ export function getCrossTabulation(institutionId: number, primaryQuestionKey: st
 export async function sendTestSmtpEmail(toAddress: string) {
   const smtp = getSmtpSettings()
   if (!smtp.serverAddress || !smtp.username) {
-    return { preview: true, message: 'SMTP not configured; email sending skipped.' }
+    return { delivered: false, message: 'SMTP is not configured; email sending skipped.' }
   }
 
   const { createTransport } = await import('nodemailer')
@@ -852,11 +913,11 @@ export async function sendTestSmtpEmail(toAddress: string) {
   await transport.sendMail({
     from: smtp.sendAddress || smtp.username,
     to: toAddress,
-    subject: 'Quick Glimpse — SMTP test',
-    text: 'This is a test email from Quick Glimpse. Your SMTP configuration is working correctly.',
+    subject: 'Qglimpse SMTP test',
+    text: 'This is a test email from Qglimpse. Your SMTP configuration is working correctly.',
   })
 
-  return { preview: false, message: `Test email sent to ${toAddress}.` }
+  return { delivered: true, message: `Test email sent to ${toAddress}.` }
 }
 
 export function buildBootstrapPayload() {
@@ -877,10 +938,10 @@ export function buildBootstrapPayload() {
       questionBankSeeded: demographicsTemplates.length + insightTemplates.length,
     },
     authCore: {
-      supportedRoles: ['root', 'institution_admin', 'institution_user'],
+      supportedRoles: ['root', 'institution_admin', 'institution_user', 'institution_kiosk'],
       userStatuses,
       turnstileSiteKey: config.turnstile.siteKey,
-      devBypassTokenHint: config.turnstile.secretKey ? null : config.turnstile.devBypassToken,
+      turnstileRequired: Boolean(config.turnstile.secretKey),
     },
     questionTypes: ['single', 'multiple', 'text', 'scale', 'boolean', 'star'],
   }

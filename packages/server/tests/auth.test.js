@@ -15,8 +15,8 @@ process.env.QUICKGLIMPSE_INSTITUTION_SEED_PASSWORD = 'ChangeMeInstitution123!'
 const auth = await import('../dist/auth.js')
 auth.ensureSeedCredentials()
 
-test('turnstile dev bypass token is accepted in local mode', async () => {
-  const verified = await auth.verifyTurnstileToken('dev-turnstile-pass')
+test('turnstile verification is disabled in local mode without a secret', async () => {
+  const verified = await auth.verifyTurnstileToken('')
   assert.equal(verified.success, true)
 })
 
