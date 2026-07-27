@@ -1,8 +1,8 @@
 import express from 'express';
 import rateLimit from 'express-rate-limit';
 import path from 'node:path';
-import { existsSync } from 'node:fs';
-import { pathToFileURL } from 'node:url';
+import { existsSync, realpathSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { authenticateSession, changeRequiredPassword, changeOwnPassword, confirmPasswordReset, ensureInitialAdminLogin, deleteManagedUser, ensureSeedCredentials, listUsers, loginUser, logoutSession, registerUser, toggle2FA, updateManagedUser, updateUserEmail, updateUserStatus, userRoles, userStatuses, verifyMagicLinkChallenge, verifyOtpChallenge, verifyTurnstileToken, } from './auth.js';
@@ -11,10 +11,63 @@ import { config } from './config.js';
 import { getDb } from './db.js';
 import { sendOperationalEmail } from './mailer.js';
 import { recordAuditEvent } from './audit.js';
-getDb();
-runRetentionCleanup();
-if (!config.isProduction) {
-    ensureSeedCredentials();
+function writeStartupLog(level, message, details = {}) {
+    const payload = {
+        timestamp: new Date().toISOString(),
+        level,
+        service: 'qglimpse-server',
+        phase: 'startup',
+        message,
+        ...details,
+    };
+    const line = JSON.stringify(redactForLog(payload));
+    if (level === 'error') {
+        console.error(line);
+    }
+    else {
+        console.log(line);
+    }
+}
+function initializeRuntime() {
+    writeStartupLog('info', 'Configuration loaded.', {
+        node: process.version,
+        pid: process.pid,
+        cwd: process.cwd(),
+        argv: process.argv,
+        nodeEnv: config.nodeEnv,
+        isProduction: config.isProduction,
+        port: config.port,
+        baseUrl: config.baseUrl,
+        trustProxy: config.trustProxy,
+        dataDir: config.dataDir,
+        databasePath: config.databasePath,
+    });
+    writeStartupLog('info', 'Opening database.');
+    getDb();
+    writeStartupLog('info', 'Database opened and migrations completed.');
+    writeStartupLog('info', 'Running retention cleanup.');
+    runRetentionCleanup();
+    writeStartupLog('info', 'Retention cleanup completed.');
+    if (!config.isProduction) {
+        writeStartupLog('warn', 'Non-production seed credentials are enabled.');
+        ensureSeedCredentials();
+    }
+}
+try {
+    initializeRuntime();
+}
+catch (error) {
+    writeStartupLog('error', 'Startup initialization failed.', {
+        errorName: error instanceof Error ? error.name : null,
+        errorMessage: error instanceof Error ? error.message : String(error),
+        stack: error instanceof Error ? error.stack : null,
+        cause: error instanceof Error && error.cause instanceof Error ? {
+            name: error.cause.name,
+            message: error.cause.message,
+            stack: error.cause.stack,
+        } : null,
+    });
+    throw error;
 }
 const kioskSchema = z.object({
     enabled: z.boolean(),
@@ -1367,7 +1420,20 @@ export function createApp() {
     });
     return app;
 }
-const isDirectRun = Boolean(process.argv[1]) && import.meta.url === pathToFileURL(process.argv[1] ?? '').href;
+function getRealPath(value) {
+    try {
+        return realpathSync(value);
+    }
+    catch {
+        return path.resolve(value);
+    }
+}
+function isDirectRun() {
+    if (!process.argv[1]) {
+        return false;
+    }
+    return getRealPath(process.argv[1]) === getRealPath(fileURLToPath(import.meta.url));
+}
 function parseAdminInitArgs(argv) {
     const npmEmail = process.env.npm_config_email;
     const npmPassword = process.env.npm_config_password;
@@ -1426,7 +1492,31 @@ function parseAdminInitArgs(argv) {
 function printAdminInitUsage() {
     console.log('Usage: npm run admin:init -- <email> <password> [must-change-password true|false]');
 }
-if (isDirectRun) {
+function startHttpServer() {
+    writeStartupLog('info', 'Creating Express application.');
+    const app = createApp();
+    writeStartupLog('info', 'Calling app.listen().', { port: config.port });
+    const server = app.listen(config.port, () => {
+        const address = server.address();
+        writeStartupLog('info', 'Qglimpse HTTP server is listening.', {
+            port: config.port,
+            baseUrl: config.baseUrl,
+            address,
+        });
+        console.log(`Qglimpse listening on ${config.baseUrl} (port ${config.port})`);
+    });
+    server.on('error', (error) => {
+        writeStartupLog('error', 'HTTP server listen error.', {
+            errorName: error.name,
+            errorMessage: error.message,
+            stack: error.stack,
+            port: config.port,
+        });
+        process.exitCode = 1;
+    });
+    return server;
+}
+if (isDirectRun()) {
     if (process.argv[2] === 'init-admin') {
         try {
             const options = parseAdminInitArgs(process.argv.slice(3));
@@ -1464,9 +1554,12 @@ if (isDirectRun) {
                 stack: error.stack,
             });
         });
-        const app = createApp();
-        app.listen(config.port, () => {
-            console.log(`Qglimpse listening on ${config.baseUrl}`);
-        });
+        startHttpServer();
     }
+}
+else {
+    writeStartupLog('warn', 'Server module imported without starting HTTP listener.', {
+        argv: process.argv,
+        modulePath: fileURLToPath(import.meta.url),
+    });
 }
