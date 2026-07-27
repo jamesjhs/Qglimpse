@@ -193,10 +193,6 @@ export const config = {
   sessionIdleTtlMs,
   smtpSeed,
   turnstile,
-  seedCredentials: {
-    rootPassword: isProduction ? '' : requireEnv('QUICKGLIMPSE_ROOT_SEED_PASSWORD'),
-    institutionAdminPassword: isProduction ? '' : requireEnv('QUICKGLIMPSE_INSTITUTION_SEED_PASSWORD'),
-  },
 }
 
 validateProductionConfig(config)

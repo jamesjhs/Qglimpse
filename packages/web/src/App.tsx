@@ -181,6 +181,58 @@ function friendlyDisplayError(message: string) {
   return message
 }
 
+function friendlyHttpStatusMessage(status: number, fallback: string) {
+  if (status === 400) return 'Please check the form and try again.'
+  if (status === 401) return 'Your sign-in details were not accepted. Please check them and try again.'
+  if (status === 403) return 'You do not have permission to do that.'
+  if (status === 404) return 'That item could not be found. It may have been moved or deleted.'
+  if (status === 409) return 'That change conflicts with existing data. Please refresh and try again.'
+  if (status === 429) return 'Too many requests. Please wait a few minutes and try again.'
+  if (status >= 500) return 'The server hit a problem. Please try again shortly.'
+  return fallback
+}
+
+function friendlyPlainTextResponse(text: string, fallback: string) {
+  const trimmed = text.trim()
+  if (!trimmed) return fallback
+  if (/too many/i.test(trimmed)) return 'Too many requests. Please wait a few minutes and try again.'
+  if (/rate/i.test(trimmed) && /limit/i.test(trimmed)) return 'Too many requests. Please wait a few minutes and try again.'
+  if (/cannot\s+(get|post|put|patch|delete)/i.test(trimmed)) return 'The requested server endpoint is not available.'
+  if (/<!doctype html|<html/i.test(trimmed)) return 'The server returned a web page instead of app data. Please refresh and try again.'
+  return trimmed.length > 180 ? fallback : trimmed
+}
+
+async function readJsonBody<T>(response: Response, fallback: string): Promise<T> {
+  const text = await response.text()
+  if (!text.trim()) {
+    throw new Error(fallback)
+  }
+  try {
+    return JSON.parse(text) as T
+  } catch {
+    throw new Error(friendlyPlainTextResponse(text, fallback))
+  }
+}
+
+async function responseErrorMessage(response: Response, fallback: string) {
+  const statusFallback = friendlyHttpStatusMessage(response.status, fallback)
+  try {
+    const text = await response.text()
+    if (!text.trim()) {
+      return statusFallback
+    }
+    try {
+      const payload = JSON.parse(text) as { error?: unknown; message?: unknown }
+      const message = typeof payload.error === 'string' ? payload.error : typeof payload.message === 'string' ? payload.message : ''
+      return message || statusFallback
+    } catch {
+      return friendlyPlainTextResponse(text, statusFallback)
+    }
+  } catch {
+    return statusFallback
+  }
+}
+
 const fallbackTimezones = [
   'UTC',
   'Europe/London',
@@ -898,13 +950,13 @@ function App() {
           throw new Error('Stored session is invalid or expired.')
         }
 
-        const session = (await response.json()) as {
+        const session = await readJsonBody<{
           token?: string
           expiresAt: string
           user: AuthUser
           mustChangePassword?: boolean
           redirectPath?: string
-        }
+        }>(response, 'Unable to restore your previous session.')
         const restoredToken = session.token ?? token
         setAuthToken(restoredToken)
         setSessionUser(session.user)
@@ -979,7 +1031,7 @@ function App() {
       })
 
       if (!response.ok) {
-        throw new Error('Unable to request password reset.')
+        throw new Error(await responseErrorMessage(response, 'Unable to request password reset.'))
       }
 
       setPasswordResetMessage('If the account exists, password reset instructions will be sent.')
@@ -1024,13 +1076,6 @@ function App() {
     const formData = new FormData(event.currentTarget)
     const email = String(formData.get('email') ?? '')
     const password = String(formData.get('password') ?? '')
-    console.debug('Submitting login payload', {
-      emailLength: email.length,
-      passwordPresent: password.length > 0,
-      passwordLength: password.length,
-      turnstileTokenPresent: turnstileToken.length > 0,
-      turnstileTokenLength: turnstileToken.length,
-    })
     const response = await fetch('/api/auth/login', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -1042,12 +1087,11 @@ function App() {
     })
 
     if (!response.ok) {
-      const result = (await response.json()) as { error?: string }
       setTurnstileResetSignal((current) => current + 1)
-      throw new Error(result.error ?? 'Unable to login.')
+      throw new Error(await responseErrorMessage(response, 'Unable to sign in.'))
     }
 
-    const result = (await response.json()) as LoginResult
+    const result = await readJsonBody<LoginResult>(response, 'The server returned an invalid sign-in response.')
     if ('challengePending' in result && result.challengePending) {
       setPendingTwoFa(result)
       return
@@ -1067,10 +1111,12 @@ function App() {
       body: JSON.stringify({ email: pendingTwoFa.email, code: String(formData.get('code') ?? '') }),
     })
     if (!response.ok) {
-      const result = (await response.json()) as { error?: string }
-      throw new Error(result.error ?? 'OTP verification failed.')
+      throw new Error(await responseErrorMessage(response, 'OTP verification failed.'))
     }
-    const result = (await response.json()) as { token: string; user: AuthUser; mustChangePassword: boolean; redirectPath?: string }
+    const result = await readJsonBody<{ token: string; user: AuthUser; mustChangePassword: boolean; redirectPath?: string }>(
+      response,
+      'The server returned an invalid verification response.',
+    )
     setPendingTwoFa(null)
     await applyAuthenticatedSession(result)
   }
@@ -1803,7 +1849,7 @@ function App() {
               ) : (
                 <section className="mx-auto grid w-full max-w-lg gap-4 py-2 sm:py-8">
                 <article className="rounded-xl border border-[var(--brand-100)] bg-white p-4 shadow-sm shadow-[color:var(--brand-shadow)] sm:p-6">
-                  <form className="grid gap-3" onSubmit={(event) => void loginAuthUser(event).catch((caughtError: unknown) => setError(caughtError instanceof Error ? caughtError.message : 'Login failed.'))}>
+                  <form className="grid gap-3" onSubmit={(event) => void loginAuthUser(event).catch((caughtError: unknown) => setError(caughtError instanceof TypeError ? 'Unable to reach the server. Please check your connection and try again.' : caughtError instanceof Error ? caughtError.message : 'Login failed.'))}>
                     <input autoComplete="username" className="rounded-xl border border-slate-300 px-3 py-2" name="email" placeholder="Email address" required type="email" />
                     <PasswordInput autoComplete="current-password" name="password" placeholder="Password" />
                     {requiresTurnstileWidget && bootstrap.authCore.turnstileSiteKey ? (
@@ -1838,7 +1884,7 @@ function App() {
                       <div className="mt-4 rounded-xl border border-sky-200 bg-sky-50 px-4 py-4 text-sm">
                         <div className="font-semibold text-sky-900">2FA required</div>
                         <div className="mt-1 text-sky-700">Enter the one-time code sent to {pendingTwoFa.email}.</div>
-                        <form className="mt-3 grid gap-2 sm:flex" onSubmit={(event) => void verify2FA(event).catch((err: unknown) => setError(err instanceof Error ? err.message : '2FA failed.'))}>
+                        <form className="mt-3 grid gap-2 sm:flex" onSubmit={(event) => void verify2FA(event).catch((err: unknown) => setError(err instanceof TypeError ? 'Unable to reach the server. Please check your connection and try again.' : err instanceof Error ? err.message : '2FA failed.'))}>
                           <input className="rounded-xl border border-slate-300 px-3 py-2 font-mono" name="code" placeholder="000000" required />
                           <button className="rounded-full bg-sky-700 px-4 py-2 text-sm font-semibold text-white" type="submit">Verify</button>
                         </form>

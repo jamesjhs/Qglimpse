@@ -468,43 +468,6 @@ export function deleteManagedUser(id: number) {
   })()
 }
 
-export function ensureSeedCredentials() {
-  if (config.isProduction) {
-    return
-  }
-
-  const db = getDb()
-  const seedUsers = [
-    {
-      email: 'root@quickglimpse.local',
-      password: config.seedCredentials.rootPassword,
-      mustChangePassword: true,
-    },
-    {
-      email: 'institution-admin@quickglimpse.local',
-      password: config.seedCredentials.institutionAdminPassword,
-      mustChangePassword: true,
-    },
-  ]
-
-  for (const seedUser of seedUsers) {
-    const user = db.prepare('SELECT id FROM users WHERE email = ?').get(seedUser.email) as { id: number } | undefined
-    if (!user) {
-      continue
-    }
-
-    const existingCredential = db
-      .prepare('SELECT user_id FROM user_credentials WHERE user_id = ?')
-      .get(user.id) as { user_id: number } | undefined
-
-    if (!existingCredential) {
-      db.prepare(
-        'INSERT INTO user_credentials (user_id, password_hash, must_change_password) VALUES (?, ?, ?)',
-      ).run(user.id, hashSync(seedUser.password, 12), seedUser.mustChangePassword ? 1 : 0)
-    }
-  }
-}
-
 export function purgeLegacySeedUsers() {
   const db = getDb()
   const seedEmails = ['root@quickglimpse.local', 'institution-admin@quickglimpse.local']

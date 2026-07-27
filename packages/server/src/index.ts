@@ -307,6 +307,9 @@ const smtpTestSchema = z.object({
 
 const webDistPath = path.resolve(import.meta.dirname, '../../web/dist')
 const devMode = !config.turnstile.secretKey
+const rateLimitJsonHandler = (_req: express.Request, res: express.Response) => {
+  res.status(429).json({ error: 'Too many requests. Please wait a few minutes and try again.' })
+}
 
 const authChallengeLimiter = rateLimit({
   windowMs: 5 * 60 * 1000,
@@ -314,6 +317,7 @@ const authChallengeLimiter = rateLimit({
   skip: () => devMode,
   standardHeaders: true,
   legacyHeaders: false,
+  handler: rateLimitJsonHandler,
 })
 
 const authCoreLimiter = rateLimit({
@@ -322,6 +326,7 @@ const authCoreLimiter = rateLimit({
   skip: () => devMode,
   standardHeaders: true,
   legacyHeaders: false,
+  handler: rateLimitJsonHandler,
 })
 
 const kioskRuntimeLimiter = rateLimit({
@@ -330,6 +335,7 @@ const kioskRuntimeLimiter = rateLimit({
   skip: () => devMode,
   standardHeaders: true,
   legacyHeaders: false,
+  handler: rateLimitJsonHandler,
 })
 
 const spaShellLimiter = rateLimit({
@@ -338,6 +344,7 @@ const spaShellLimiter = rateLimit({
   skip: () => devMode,
   standardHeaders: true,
   legacyHeaders: false,
+  handler: rateLimitJsonHandler,
 })
 
 const fallbackLimiter = rateLimit({
@@ -346,6 +353,7 @@ const fallbackLimiter = rateLimit({
   skip: () => devMode,
   standardHeaders: true,
   legacyHeaders: false,
+  handler: rateLimitJsonHandler,
 })
 
 const privilegedOpsLimiter = rateLimit({
@@ -354,6 +362,7 @@ const privilegedOpsLimiter = rateLimit({
   skip: () => devMode,
   standardHeaders: true,
   legacyHeaders: false,
+  handler: rateLimitJsonHandler,
 })
 
 function extractBearerToken(headerValue?: string) {
