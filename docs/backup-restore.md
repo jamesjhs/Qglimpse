@@ -57,7 +57,7 @@ Use this runbook when the production host, data directory, Cloudflare Tunnel, or
 7. Start Qglimpse in maintenance isolation and verify database open, migrations, and `/readyz`.
 8. Run retention cleanup before exposing restored data.
 9. Rotate session secret material and SMTP credentials if compromise is suspected; force affected users to sign in again.
-10. Validate root login, institution-scoped admin login, kiosk login, analytics read paths, unknown QR route fail-closed behavior, and export route authorization.
+10. Validate root login, institution-scoped admin login, kiosk login, analytics read paths, QR expiry/reuse fail-closed behavior, and export route authorization.
 11. Re-enable Cloudflare routing only after verification passes.
 12. Record recovery point, recovery time, data loss window, credentials rotated, users notified, and follow-up actions.
 

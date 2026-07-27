@@ -1,9 +1,9 @@
-const APP_VERSION = "0.3.4";
+const APP_VERSION = "0.5.1";
 const CACHE_NAME = `qglimpse-${APP_VERSION}`;
 const PRECACHE_URLS = [
   "/",
   "/index.html",
-  "/manifest.webmanifest?v=0.3.4",
+  "/manifest.webmanifest?v=0.5.1",
   "/favicon.ico",
   "/favicon-32.png",
   "/favicon-16.png",
@@ -13,7 +13,7 @@ const PRECACHE_URLS = [
   "/icon-192.svg",
   "/icon-512.svg",
   "/maskable-icon.svg",
-  "/assets/index-DL2pk0vL.js",
+  "/assets/index-CqzEgXVI.js",
   "/assets/index-DjOFpoAE.css"
 ];
 

@@ -10,6 +10,7 @@ The server runs retention cleanup at startup. Cleanup deletes:
 
 - `responses` rows older than the configured retention window.
 - `kiosk_sessions` rows older than the configured retention window.
+- consumed, expired, or retention-expired `guest_qr_tokens`.
 - consumed, expired, or retention-expired `login_challenges`.
 
 Aggregate analytics may outlive raw rows only when the aggregate cannot reconstruct a session-level payload, free-text answer, rare demographic slice, or small cohort.
@@ -20,4 +21,4 @@ Backups containing raw feedback follow the same 90-day default expectation and m
 
 ## Export paths
 
-XLSX export is not implemented in this release. The reserved API path `/api/institutions/:id/export` requires an authenticated root or same-institution admin and returns `501` until export generation is implemented. Unknown QR and export-like API paths return JSON `404` before SPA fallback routing.
+XLSX export is not implemented in this release. The reserved API path `/api/institutions/:id/export` requires an authenticated root or same-institution admin and returns `501` until export generation is implemented. Unknown export-like API paths return JSON `404` before SPA fallback routing. QR submission paths are implemented and fail closed for expired, consumed, forged, cross-institution, inactive-session, or unavailable-kiosk tokens.

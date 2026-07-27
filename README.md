@@ -92,13 +92,11 @@ Non-goals:
 
 ## Current Repository Snapshot
 
-Current implementation includes a React/Vite web app, an Express API, PM2 config, role-based auth including kiosk-only accounts, SMTP-delivered OTP/magic-link/password-reset/email-verification challenges, session rotation/revocation/idle timeout, audit events with stable audit IDs, structured secret-redacted error logs with request IDs, seeded development institutions/questions, Turnstile integration points, SMTP settings, kiosk session APIs, retention cleanup, analytics summaries, Cloudflare-oriented security headers, and deployment/compliance documentation.
+Current implementation includes a React/Vite web app, an Express API, PM2 config, role-based auth including kiosk-only accounts, SMTP-delivered OTP/magic-link/password-reset/email-verification challenges, session rotation/revocation/idle timeout, audit events with stable audit IDs, structured secret-redacted error logs with request IDs, seeded development institutions/questions, Turnstile integration points, SMTP settings, kiosk session APIs, short-lived single-use QR guest submission, installable kiosk PWA shell, retention cleanup, analytics summaries, Cloudflare-oriented security headers, and deployment/compliance documentation.
 
 Known pre-production gaps:
 
-- Single-use QR submission is not implemented.
 - XLSX export is not implemented.
-- The PWA manifest exists, but service worker/cache update behaviour is not implemented.
 
 ## Repository Layout
 
@@ -308,20 +306,20 @@ Exit criteria:
 
 ### Phase 5: Kiosk Runtime and Single-Use QR
 
-Status: Not complete. Kiosk sessions exist, but single-use QR submission is not implemented.
+Status: Completed.
 
 Goal: build the real guest-facing collection surface.
 
 Work:
 
 - Add kiosk-only login and kiosk-only route access (DONE)
-- Prevent kiosk users from reaching staff dashboards.
-- Build an installable kiosk PWA shell suitable for tablets.
-- Add optional single-use QR code display for guest-device submission.
-- Make QR tokens short-lived, single-use, institution-scoped, and bound to the active kiosk configuration.
-- Add answer validation for type, option set, institution, active question, session status, and token expiry.
-- Add configured immediate guest feedback after submission.
-- Add idle reset, failed-submission recovery, and clear offline/unavailable states.
+- Prevent kiosk users from reaching staff dashboards. (DONE)
+- Build an installable kiosk PWA shell suitable for tablets. (DONE)
+- Add optional single-use QR code display for guest-device submission. (DONE)
+- Make QR tokens short-lived, single-use, institution-scoped, and bound to the active kiosk configuration. (DONE)
+- Add answer validation for type, option set, institution, active question, session status, and token expiry. (DONE)
+- Add configured immediate guest feedback after submission. (DONE)
+- Add idle reset, failed-submission recovery, and clear offline/unavailable states. (DONE)
 
 Exit criteria:
 
@@ -354,7 +352,7 @@ Exit criteria:
 
 ### Phase 7: PWA Installability and Cache Versioning
 
-Status: Not complete. The manifest exists, but service-worker cache update behaviour is not implemented.
+Status: Completed.
 
 Goal: satisfy installable PWA shell requirements without adding unnecessary push technology.
 

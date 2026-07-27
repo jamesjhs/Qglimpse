@@ -1,7 +1,7 @@
 {
   "name": "quickglimpse",
   "private": true,
-  "version": "0.3.4",
+  "version": "0.5.1",
   "description": "Qglimpse foundation scaffold for institution visitor insights.",
   "workspaces": [
     "packages/*"

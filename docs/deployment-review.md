@@ -13,7 +13,7 @@ Use this trace to prove that data categories, retention rules, access paths, and
 | Audit events | Security and compliance evidence | Root operational database review; future admin audit UI | Retained as compliance evidence; does not store raw guest answers | Not exported in this release |
 | Structured logs | Operational diagnostics | Host logging platform | Operator-defined; must protect request IDs and redacted metadata | Not exported by Qglimpse |
 | Backups | Encrypted recovery copy | Root operator restore workflow | 90 days by default or shorter institution policy | Restore only |
-| QR guest submission | Planned anonymous guest submission | `/guest/qr/:token` SPA path; API not implemented | Planned 90-day token/payload default | Not implemented; unknown QR API paths return JSON `404` |
+| QR guest submission | Anonymous guest-device submission | `/guest/qr/:token` SPA path and `/api/guest/qr/:token` handlers | QR tokens are short-lived and deleted when consumed, expired, or retention-expired | Reserved export path returns `501`; QR answers appear as anonymous feedback |
 
 ## Review questions
 
