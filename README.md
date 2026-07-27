@@ -127,7 +127,7 @@ npm run build
 npm start
 ```
 
-Then open `http://localhost:3000`.
+Then open `http://localhost:3000`. `npm start` rebuilds the web and server packages, then launches the compiled server with `NODE_ENV=production` so it serves `packages/web/dist`.
 
 ## PM2 Runtime
 

@@ -41,7 +41,7 @@ When `TURNSTILE_SECRET_KEY` is empty, local development treats Turnstile as disa
 
 ## Production fail-closed checks
 
-Set `NODE_ENV=production` for production starts. In production:
+Set `NODE_ENV=production` for production starts. The root `npm start` script and `ecosystem.config.cjs` set it for you; leave it unset when using local development commands such as `npm run dev`. In production:
 
 - `.env.example` is never loaded as a fallback; real environment values or a real `.env` file must be present.
 - `QUICKGLIMPSE_BASE_URL` must be an `https://` URL and must not point at localhost.

@@ -291,6 +291,10 @@ const navClass = ({ isActive }: { isActive: boolean }) =>
 const statCardClass =
   'rounded-xl border border-[var(--brand-100)] bg-white/95 p-4 shadow-sm shadow-[color:var(--brand-shadow)] ring-1 ring-white/60 sm:p-5'
 
+function QglimpseLogo({ className }: { className: string }) {
+  return <img alt="" aria-hidden="true" className={className} src="/icon-192.svg" />
+}
+
 const institutionColorSchemes = {
   ocean: {
     label: 'Ocean',
@@ -1404,6 +1408,7 @@ function App() {
   return (
     <Routes>
       <Route path="/kiosk" element={sessionUser?.role === 'institution_kiosk' ? <KioskFullScreen
+        appVersion={bootstrap.app.version}
         institution={selectedInstitution}
         colorScheme={activeColorScheme}
         kioskState={kioskState}
@@ -1433,12 +1438,15 @@ function App() {
     <div className="min-h-screen bg-gradient-to-b from-[var(--brand-50)] via-white to-slate-50 text-slate-900" style={appThemeStyle}>
       <header className="border-b border-[var(--brand-100)] bg-white/90 backdrop-blur">
         <div className={`mx-auto flex max-w-6xl items-center justify-between gap-4 px-4 sm:px-6 ${sessionUser ? 'py-4 sm:py-6' : 'pb-5 pt-20 sm:pt-6'}`}>
-          <div>
-            {!isLoginPath ? <p className="text-xs font-semibold uppercase text-[var(--brand-700)] sm:text-sm">Visitor feedback platform</p> : null}
-            <h1 className={`${isLoginPath ? '' : 'mt-2'} text-2xl font-semibold tracking-tight text-slate-950 sm:text-3xl md:text-4xl`}>{bootstrap.app.name}</h1>
-            {!sessionUser && !isLoginPath ? <p className="mt-3 max-w-3xl text-sm leading-6 text-slate-600 sm:text-base">
-              Qglimpse helps organizations capture anonymous in-person feedback quickly with logged-in kiosks, secure sign-in, and easy analytics.
-            </p> : null}
+          <div className="flex min-w-0 items-start gap-3 sm:gap-4">
+            <QglimpseLogo className="mt-1 h-12 w-12 shrink-0 sm:h-16 sm:w-16" />
+            <div className="min-w-0">
+              {!isLoginPath ? <p className="text-xs font-semibold uppercase text-[var(--brand-700)] sm:text-sm">Visitor feedback platform</p> : null}
+              <h1 className={`${isLoginPath ? '' : 'mt-2'} text-2xl font-semibold tracking-tight text-slate-950 sm:text-3xl md:text-4xl`}>{bootstrap.app.name}</h1>
+              {!sessionUser && !isLoginPath ? <p className="mt-3 max-w-3xl text-sm leading-6 text-slate-600 sm:text-base">
+                Qglimpse helps organizations capture anonymous in-person feedback quickly with logged-in kiosks, secure sign-in, and easy analytics.
+              </p> : null}
+            </div>
           </div>
           {sessionUser && sessionUser.role !== 'institution_kiosk' ? (
             <button
@@ -2595,6 +2603,7 @@ function MagicLinkHandler({ onSession }: { onSession: (session: { token: string;
 export default App
 
 type KioskFullScreenProps = {
+  appVersion: string
   institution: Institution | null
   colorScheme: InstitutionColorScheme
   kioskState: 'landing' | 'questions' | 'demographics' | 'thankyou'
@@ -2624,6 +2633,7 @@ type KioskFullScreenProps = {
 function KioskFullScreen(props: KioskFullScreenProps) {
   const {
     institution, kioskState, kioskLoading, kioskQuestions, kioskCurrentIdx,
+    appVersion,
     colorScheme,
     kioskCurrentAnswer, kioskStarValue, kioskSliderValue, kioskMultiAnswers,
     kioskDemoIdx, kioskDemoAnswers, kioskCountdown, error,
@@ -2637,7 +2647,7 @@ function KioskFullScreen(props: KioskFullScreenProps) {
   const currentDemoQ = demoQuestions[kioskDemoIdx] ?? null
 
   return (
-    <div className="flex min-h-screen flex-col items-center justify-center bg-[var(--brand-900)] px-4 py-6 text-white sm:px-6" style={institutionColorSchemes[colorScheme].style as CSSProperties}>
+    <div className="relative flex min-h-screen flex-col items-center justify-center bg-[var(--brand-900)] px-4 py-6 text-white sm:px-6" style={institutionColorSchemes[colorScheme].style as CSSProperties}>
       {kioskLoading ? (
         <div className="flex flex-col items-center gap-4">
               <div className="h-12 w-12 animate-spin rounded-full border-4 border-[var(--brand-500)] border-t-transparent" />
@@ -2820,6 +2830,10 @@ function KioskFullScreen(props: KioskFullScreenProps) {
           </button>
         </div>
       ) : null}
+      <footer className="pointer-events-none fixed bottom-4 right-4 flex max-w-[calc(100vw-2rem)] items-center justify-end gap-2 text-right text-[0.7rem] font-medium text-slate-300/80 sm:bottom-5 sm:right-6 sm:text-xs">
+        <span>Built using Qglimpse visitor feedback platform, version {appVersion}</span>
+        <QglimpseLogo className="h-8 w-8 shrink-0 opacity-90 sm:h-10 sm:w-10" />
+      </footer>
     </div>
   )
 }

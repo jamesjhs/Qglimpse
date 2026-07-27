@@ -1,14 +1,20 @@
-const APP_VERSION = "0.3.1";
+const APP_VERSION = "0.3.4";
 const CACHE_NAME = `qglimpse-${APP_VERSION}`;
 const PRECACHE_URLS = [
   "/",
   "/index.html",
-  "/manifest.webmanifest?v=0.3.1",
+  "/manifest.webmanifest?v=0.3.4",
+  "/favicon.ico",
+  "/favicon-32.png",
+  "/favicon-16.png",
+  "/icon-192.png",
+  "/icon-512.png",
+  "/maskable-icon.png",
   "/icon-192.svg",
   "/icon-512.svg",
   "/maskable-icon.svg",
-  "/assets/index-C3jGExtp.js",
-  "/assets/index-DGWUHgZ7.css"
+  "/assets/index-m8pwAQXj.js",
+  "/assets/index-CazsdIhA.css"
 ];
 
 self.addEventListener('install', (event) => {
