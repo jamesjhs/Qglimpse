@@ -460,6 +460,7 @@ function App() {
   const [interestTurnstileResetSignal, setInterestTurnstileResetSignal] = useState(0)
   const [interestMessage, setInterestMessage] = useState<string | null>(null)
   const [accountMenuOpen, setAccountMenuOpen] = useState(false)
+  const [mobileNavOpen, setMobileNavOpen] = useState(false)
   const [smtpForm, setSmtpForm] = useState<SmtpFormState>({
     username: '',
     password: '',
@@ -502,6 +503,7 @@ function App() {
   const requestedRedirectPath = sanitizeRedirectPath(searchParams.get('next'))
   const authRedirectPath = `/login?next=${encodeURIComponent(currentPath)}`
   const isPublicPath = publicPaths.has(location.pathname)
+  const isLoginPath = location.pathname === '/login'
 
   const upsertDisplayedInstitution = (institution: Institution) => {
     setBootstrap((current) => {
@@ -1429,51 +1431,67 @@ function App() {
       /> : <Navigate to={sessionUser ? '/' : authRedirectPath} replace />} />
       <Route path="*" element={
     <div className="min-h-screen bg-gradient-to-b from-[var(--brand-50)] via-white to-slate-50 text-slate-900" style={appThemeStyle}>
-      {sessionUser && sessionUser.role !== 'institution_kiosk' ? (
-        <div className="fixed right-3 top-3 z-50 sm:right-6 sm:top-5" ref={accountMenuRef}>
-          <button
-            aria-expanded={accountMenuOpen}
-            aria-haspopup="menu"
-            className="flex max-w-[calc(100vw-1.5rem)] items-center gap-2 rounded-full border border-[var(--brand-100)] bg-white/95 px-3 py-2 text-sm font-semibold text-slate-800 shadow-lg shadow-[color:var(--brand-shadow)] backdrop-blur hover:bg-[var(--brand-50)] sm:max-w-sm sm:px-4"
-            onClick={() => setAccountMenuOpen((current) => !current)}
-            type="button"
-          >
-            <span className="max-w-[11rem] truncate sm:max-w-64">{sessionUser.email}</span>
-            <span aria-hidden="true" className="text-xs text-slate-500">{accountMenuOpen ? 'Close' : 'Menu'}</span>
-          </button>
-          {accountMenuOpen ? (
-            <div className="absolute right-0 z-20 mt-2 grid min-w-56 overflow-hidden rounded-xl border border-slate-200 bg-white py-2 text-sm shadow-xl shadow-slate-200/70" role="menu">
-              <NavLink
-                className="px-4 py-2 font-medium text-slate-700 hover:bg-[var(--brand-50)] hover:text-[var(--brand-900)]"
-                onClick={() => setAccountMenuOpen(false)}
-                role="menuitem"
-                to="/profile"
-              >
-                Edit profile
-              </NavLink>
+      <header className="border-b border-[var(--brand-100)] bg-white/90 backdrop-blur">
+        <div className={`mx-auto flex max-w-6xl items-center justify-between gap-4 px-4 sm:px-6 ${sessionUser ? 'py-4 sm:py-6' : 'pb-5 pt-20 sm:pt-6'}`}>
+          <div>
+            {!isLoginPath ? <p className="text-xs font-semibold uppercase text-[var(--brand-700)] sm:text-sm">Visitor feedback platform</p> : null}
+            <h1 className={`${isLoginPath ? '' : 'mt-2'} text-2xl font-semibold tracking-tight text-slate-950 sm:text-3xl md:text-4xl`}>{bootstrap.app.name}</h1>
+            {!sessionUser && !isLoginPath ? <p className="mt-3 max-w-3xl text-sm leading-6 text-slate-600 sm:text-base">
+              Qglimpse helps organizations capture anonymous in-person feedback quickly with logged-in kiosks, secure sign-in, and easy analytics.
+            </p> : null}
+          </div>
+          {sessionUser && sessionUser.role !== 'institution_kiosk' ? (
+            <button
+              aria-controls="mobile-primary-navigation"
+              aria-expanded={mobileNavOpen}
+              aria-label={mobileNavOpen ? 'Close navigation menu' : 'Open navigation menu'}
+              className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-full border border-[var(--brand-100)] bg-white text-slate-800 shadow-sm shadow-[color:var(--brand-shadow)] hover:bg-[var(--brand-50)] md:hidden"
+              onClick={() => setMobileNavOpen((current) => !current)}
+              type="button"
+            >
+              <span className="grid gap-1" aria-hidden="true">
+                <span className={`block h-0.5 w-5 rounded-full bg-current transition ${mobileNavOpen ? 'translate-y-1.5 rotate-45' : ''}`} />
+                <span className={`block h-0.5 w-5 rounded-full bg-current transition ${mobileNavOpen ? 'opacity-0' : ''}`} />
+                <span className={`block h-0.5 w-5 rounded-full bg-current transition ${mobileNavOpen ? '-translate-y-1.5 -rotate-45' : ''}`} />
+              </span>
+            </button>
+          ) : null}
+          {sessionUser && sessionUser.role !== 'institution_kiosk' ? (
+            <div className="relative hidden md:block" ref={accountMenuRef}>
               <button
-                className="px-4 py-2 text-left font-medium text-red-700 hover:bg-red-50"
-                onClick={() => void logout()}
-                role="menuitem"
+                aria-expanded={accountMenuOpen}
+                aria-haspopup="menu"
+                className="flex max-w-sm items-center gap-2 rounded-full border border-[var(--brand-100)] bg-white px-4 py-2 text-sm font-semibold text-slate-800 hover:bg-[var(--brand-50)]"
+                onClick={() => setAccountMenuOpen((current) => !current)}
                 type="button"
               >
-                Logout
+                <span className="max-w-64 truncate">{sessionUser.email}</span>
+                <span aria-hidden="true" className="text-xs text-slate-500">{accountMenuOpen ? 'Close' : 'Menu'}</span>
               </button>
+              {accountMenuOpen ? (
+                <div className="absolute right-0 z-20 mt-2 grid min-w-56 overflow-hidden rounded-xl border border-slate-200 bg-white py-2 text-sm shadow-xl shadow-slate-200/70" role="menu">
+                  <NavLink
+                    className="px-4 py-2 font-medium text-slate-700 hover:bg-[var(--brand-50)] hover:text-[var(--brand-900)]"
+                    onClick={() => setAccountMenuOpen(false)}
+                    role="menuitem"
+                    to="/profile"
+                  >
+                    Edit profile
+                  </NavLink>
+                  <button
+                    className="px-4 py-2 text-left font-medium text-red-700 hover:bg-red-50"
+                    onClick={() => void logout()}
+                    role="menuitem"
+                    type="button"
+                  >
+                    Logout
+                  </button>
+                </div>
+              ) : null}
             </div>
           ) : null}
         </div>
-      ) : null}
-      <header className="border-b border-[var(--brand-100)] bg-white/90 backdrop-blur">
-        <div className="mx-auto flex max-w-6xl flex-col gap-4 px-4 pb-5 pt-20 sm:px-6 sm:pt-6 lg:flex-row lg:items-end lg:justify-between">
-          <div>
-            <p className="text-xs font-semibold uppercase text-[var(--brand-700)] sm:text-sm">Visitor feedback platform</p>
-            <h1 className="mt-2 text-2xl font-semibold tracking-tight text-slate-950 sm:text-3xl md:text-4xl">{bootstrap.app.name}</h1>
-            <p className="mt-3 max-w-3xl text-sm leading-6 text-slate-600 sm:text-base">
-              Qglimpse helps organizations capture anonymous in-person feedback quickly with logged-in kiosks, secure sign-in, and easy analytics.
-            </p>
-          </div>
-        </div>
-        <nav aria-label="Primary" className="mx-auto grid w-full max-w-6xl grid-cols-2 gap-2 px-4 pb-4 sm:flex sm:flex-wrap sm:px-6 sm:pb-6">
+        <nav aria-label="Primary" className={`mx-auto w-full max-w-6xl px-4 pb-4 sm:px-6 sm:pb-6 ${sessionUser ? 'hidden md:flex md:flex-wrap md:gap-2' : 'grid grid-cols-2 gap-2 sm:flex sm:flex-wrap'}`}>
           {!sessionUser ? (
             <>
               <NavLink className={navClass} to="/">Home</NavLink>
@@ -1500,6 +1518,36 @@ function App() {
             </>
           )}
         </nav>
+        {sessionUser && sessionUser.role !== 'institution_kiosk' && mobileNavOpen ? (
+          <nav
+            aria-label="Mobile primary"
+            className="mx-4 mb-4 grid gap-2 rounded-xl border border-[var(--brand-100)] bg-white p-3 shadow-lg shadow-[color:var(--brand-shadow)] md:hidden"
+            id="mobile-primary-navigation"
+          >
+            <p className="truncate px-2 pb-1 text-xs font-semibold uppercase text-slate-500">{sessionUser.email}</p>
+            <NavLink className={navClass} onClick={() => setMobileNavOpen(false)} to="/">Overview</NavLink>
+            <NavLink className={navClass} onClick={() => setMobileNavOpen(false)} to="/institutions">Institutions</NavLink>
+            <NavLink className={navClass} onClick={() => setMobileNavOpen(false)} to="/questions">Questions</NavLink>
+            <NavLink className={navClass} onClick={() => setMobileNavOpen(false)} to="/analytics">Analytics</NavLink>
+            {sessionUser.role === 'root' ? (
+              <>
+                <NavLink className={navClass} onClick={() => setMobileNavOpen(false)} to="/root">Root</NavLink>
+                <NavLink className={navClass} onClick={() => setMobileNavOpen(false)} to="/users">Users</NavLink>
+                <NavLink className={navClass} onClick={() => setMobileNavOpen(false)} to="/smtp">SMTP</NavLink>
+              </>
+            ) : null}
+            <div className="mt-1 grid gap-2 border-t border-slate-200 pt-3">
+              <NavLink className={navClass} onClick={() => setMobileNavOpen(false)} to="/profile">Edit profile</NavLink>
+              <button
+                className="inline-flex min-h-11 w-full items-center justify-center rounded-full px-4 py-2 text-sm font-semibold text-red-700 hover:bg-red-50"
+                onClick={() => void logout()}
+                type="button"
+              >
+                Logout
+              </button>
+            </div>
+          </nav>
+        ) : null}
       </header>
 
       <main className="mx-auto grid max-w-6xl gap-5 px-4 py-5 sm:gap-6 sm:py-8 md:px-6">
@@ -1644,22 +1692,9 @@ function App() {
               sessionUser ? (
                 <Navigate to={requestedRedirectPath} replace />
               ) : (
-                <section className="mx-auto grid w-full max-w-5xl gap-6 py-2 lg:grid-cols-[0.9fr_1.1fr] lg:items-center lg:py-10">
-                <div>
-                  <p className="text-xs font-semibold uppercase text-[var(--brand-700)] sm:tracking-[0.2em]">Account access</p>
-                  <h2 className="mt-4 text-3xl font-semibold leading-tight tracking-tight text-slate-950 sm:text-4xl md:text-5xl">
-                    Sign in to Qglimpse.
-                  </h2>
-                  <p className="mt-4 max-w-md text-base leading-7 text-slate-600 sm:mt-5">
-                    Use your institutional account to continue to the right workspace for your role.
-                  </p>
-                  <NavLink className="mt-7 inline-flex text-sm font-semibold text-[var(--brand-700)] underline underline-offset-4" to="/">
-                    Back to home
-                  </NavLink>
-                </div>
+                <section className="mx-auto grid w-full max-w-lg gap-4 py-2 sm:py-8">
                 <article className="rounded-xl border border-[var(--brand-100)] bg-white p-4 shadow-sm shadow-[color:var(--brand-shadow)] sm:p-6">
-                  <h3 className="text-xl font-semibold text-slate-950">Login</h3>
-                  <form className="mt-5 grid gap-3" onSubmit={(event) => void loginAuthUser(event).catch((caughtError: unknown) => setError(caughtError instanceof Error ? caughtError.message : 'Login failed.'))}>
+                  <form className="grid gap-3" onSubmit={(event) => void loginAuthUser(event).catch((caughtError: unknown) => setError(caughtError instanceof Error ? caughtError.message : 'Login failed.'))}>
                     <input autoComplete="username" className="rounded-xl border border-slate-300 px-3 py-2" name="email" placeholder="Email address" required type="email" />
                     <PasswordInput autoComplete="current-password" name="password" placeholder="Password" />
                     {requiresTurnstileWidget && bootstrap.authCore.turnstileSiteKey ? (
@@ -1701,6 +1736,9 @@ function App() {
                       </div>
                     ) : null}
                 </article>
+                <NavLink className="justify-self-start text-sm font-semibold text-[var(--brand-700)] underline underline-offset-4" to="/">
+                  Back to home
+                </NavLink>
               </section>
               )
             }
@@ -1737,7 +1775,7 @@ function App() {
                     </div>
                   </article>
                 ) : null}
-                <div className="grid gap-4 md:grid-cols-2">
+                <div className="grid gap-4 xl:grid-cols-2">
                   {bootstrap.institutions.map((institution) => (
                     <article
                       className={statCardClass}
@@ -1764,7 +1802,7 @@ function App() {
                       </div>
                       {sessionUser?.role === 'root' || (sessionUser?.role === 'institution_admin' && sessionUser.institutionId === institution.id) ? (
                         <form className="mt-4 grid gap-3 border-t border-slate-100 pt-4" onSubmit={(event) => void saveInstitutionSettings(event, institution).catch((err: unknown) => setError(err instanceof Error ? err.message : 'Save failed.'))}>
-                          <div className="grid gap-3 sm:grid-cols-2">
+                          <div className="grid gap-3 lg:grid-cols-2">
                             <label className="grid gap-1 text-sm font-medium">
                               Name
                               <input className="rounded-xl border border-slate-300 px-3 py-2" defaultValue={institution.name} name="name" required />
