@@ -11,9 +11,7 @@
     "lint": "npm run lint --workspace @quickglimpse/web && npm run lint --workspace @quickglimpse/server",
     "test": "npm run test --workspace @quickglimpse/server",
     "audit:deps": "npm audit --workspaces --audit-level=high",
-    "prestart": "npm run build",
     "start": "node scripts/start-production.mjs",
-    "dev": "npm run dev --workspace @quickglimpse/server",
     "admin:init": "npm run create-initial-admin --workspace @quickglimpse/server"
   },
   "engines": {

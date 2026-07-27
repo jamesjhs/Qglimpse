@@ -38,6 +38,14 @@ function runInline(script, env) {
   })
 }
 
+function runInlineFrom(cwd, script, env) {
+  return spawnSync(process.execPath, ['--input-type=module', '--eval', script], {
+    cwd,
+    env,
+    encoding: 'utf8',
+  })
+}
+
 test('production config rejects unsafe deployment settings', () => {
   const result = runInline(
     "await import('./dist/config.js')",
@@ -48,6 +56,31 @@ test('production config rejects unsafe deployment settings', () => {
 
   assert.notEqual(result.status, 0)
   assert.match(`${result.stderr}${result.stdout}`, /QUICKGLIMPSE_BASE_URL must use https:\/\/ in production/)
+})
+
+test('relative data paths resolve from repository root across workspace commands', () => {
+  const repoRoot = path.resolve(process.cwd(), '..', '..')
+  const result = runInlineFrom(
+    process.cwd(),
+    `
+      const { config } = await import('./dist/config.js')
+      console.log(JSON.stringify({
+        dataDir: config.dataDir,
+        databasePath: config.databasePath,
+      }))
+    `,
+    productionEnv({
+      QUICKGLIMPSE_DATA_DIR: './data',
+      QUICKGLIMPSE_DB_PATH: './data/quickglimpse.db',
+    }),
+  )
+
+  assert.equal(result.status, 0, result.stderr)
+  const output = JSON.parse(result.stdout.trim())
+  assert.deepEqual(output, {
+    dataDir: path.join(repoRoot, 'data'),
+    databasePath: path.join(repoRoot, 'data', 'quickglimpse.db'),
+  })
 })
 
 test('production database startup records schema version and does not seed live users', () => {

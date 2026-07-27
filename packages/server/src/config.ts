@@ -68,6 +68,10 @@ function optionalEnv(name: string) {
   return value || undefined
 }
 
+function resolveRepoPath(value: string) {
+  return path.isAbsolute(value) ? value : path.resolve(repoRoot, value)
+}
+
 function requireProductionEnv(name: string) {
   return isProduction ? requireEnv(name) : (optionalEnv(name) ?? '')
 }
@@ -146,7 +150,7 @@ function validateProductionConfig(input: {
 }
 
 const dataDir = process.env.QUICKGLIMPSE_DATA_DIR
-  ? path.resolve(process.env.QUICKGLIMPSE_DATA_DIR)
+  ? resolveRepoPath(process.env.QUICKGLIMPSE_DATA_DIR)
   : path.join(repoRoot, '.data')
 
 mkdirSync(dataDir, { recursive: true })
@@ -182,7 +186,7 @@ export const config = {
   baseUrl: requireEnv('QUICKGLIMPSE_BASE_URL'),
   trustProxy: parseTrustProxyEnv(),
   dataDir,
-  databasePath: requireEnv('QUICKGLIMPSE_DB_PATH'),
+  databasePath: resolveRepoPath(requireEnv('QUICKGLIMPSE_DB_PATH')),
   databaseEncryptionKey,
   sessionSecret,
   sessionTtlMs,

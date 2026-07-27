@@ -127,7 +127,15 @@ npm run build
 npm start
 ```
 
-Then open `http://localhost:3000`. `npm start` rebuilds the web and server packages, then launches the compiled server with `NODE_ENV=production` so it serves `packages/web/dist`.
+Then open `http://localhost:3000`. `npm run build` compiles the React SPA and server once; `npm start` launches those compiled production artifacts with `NODE_ENV=production` and does not rebuild.
+
+Reset or create the root user password with:
+
+```bash
+npm run admin:init -- admin@example.com 'NewRootPassword123!' true
+```
+
+This command updates the first root account, revokes its active sessions, and forces a password change on next login unless the final argument is `false`.
 
 ## PM2 Runtime
 

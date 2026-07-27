@@ -65,15 +65,12 @@ npm start
 - Confirm `TURNSTILE_SITE_KEY` and `TURNSTILE_SECRET_KEY` are both set from the same Cloudflare Turnstile widget.
 - Confirm the deployment CSP allows `https://challenges.cloudflare.com` for scripts, frames, and connections.
 - Reload the page and complete the Turnstile challenge again.
-- In local development only, leave `TURNSTILE_SECRET_KEY` empty to disable Turnstile verification locally.
 
 ### Rate limit `429` on auth endpoints
 
 **Cause:** More than 5 challenge/reset requests in a 5-minute window from the same IP, or more than 20 login/register attempts.
 
-**Fix:** Rate limiters are skipped only when `TURNSTILE_SECRET_KEY` is empty for local development; verify the app is running with the intended auth config and retry.
-
-**Fix (production):** Wait for the window to expire, or adjust `windowMs` / `limit` in `packages/server/src/index.ts` if the defaults are too restrictive for your traffic pattern.
+**Fix:** Wait for the window to expire, verify the app is running with the intended production auth config, or adjust `windowMs` / `limit` in `packages/server/src/index.ts` if the defaults are too restrictive for your traffic pattern.
 
 ---
 

@@ -143,6 +143,11 @@ type ManagedUser = AuthUser & {
 
 type TurnstileWidgetId = string | number
 
+type BeforeInstallPromptEvent = Event & {
+  prompt: () => Promise<void>
+  userChoice: Promise<{ outcome: 'accepted' | 'dismissed'; platform: string }>
+}
+
 type PasswordInputProps = {
   autoComplete: 'current-password' | 'new-password'
   name: string
@@ -287,9 +292,21 @@ const navClass = ({ isActive }: { isActive: boolean }) =>
       ? 'bg-[var(--brand-700)] text-white shadow-lg shadow-[color:var(--brand-shadow)]'
       : 'text-slate-600 hover:bg-[var(--brand-100)] hover:text-[var(--brand-900)]'
   }`
+const installButtonClass =
+  'inline-flex min-h-11 w-full shrink-0 items-center justify-center whitespace-nowrap rounded-full bg-[var(--brand-700)] px-4 py-2 text-sm font-semibold text-white shadow-lg shadow-[color:var(--brand-shadow)] transition hover:bg-[var(--brand-600)] sm:w-auto'
 
 const statCardClass =
   'rounded-xl border border-[var(--brand-100)] bg-white/95 p-4 shadow-sm shadow-[color:var(--brand-shadow)] ring-1 ring-white/60 sm:p-5'
+
+function isRunningAsInstalledApp() {
+  return (
+    window.matchMedia('(display-mode: standalone)').matches ||
+    window.matchMedia('(display-mode: fullscreen)').matches ||
+    window.matchMedia('(display-mode: minimal-ui)').matches ||
+    (window.navigator as Navigator & { standalone?: boolean }).standalone === true ||
+    document.referrer.startsWith('android-app://')
+  )
+}
 
 function QglimpseLogo({ className }: { className: string }) {
   return <img alt="" aria-hidden="true" className={className} src="/icon-192.svg" />
@@ -465,6 +482,9 @@ function App() {
   const [interestMessage, setInterestMessage] = useState<string | null>(null)
   const [accountMenuOpen, setAccountMenuOpen] = useState(false)
   const [mobileNavOpen, setMobileNavOpen] = useState(false)
+  const [installPromptEvent, setInstallPromptEvent] = useState<BeforeInstallPromptEvent | null>(null)
+  const [installHelpOpen, setInstallHelpOpen] = useState(false)
+  const [runningAsInstalledApp, setRunningAsInstalledApp] = useState(() => isRunningAsInstalledApp())
   const [smtpForm, setSmtpForm] = useState<SmtpFormState>({
     username: '',
     password: '',
@@ -508,6 +528,7 @@ function App() {
   const authRedirectPath = `/login?next=${encodeURIComponent(currentPath)}`
   const isPublicPath = publicPaths.has(location.pathname)
   const isLoginPath = location.pathname === '/login'
+  const canOfferInstall = !runningAsInstalledApp
 
   const upsertDisplayedInstitution = (institution: Institution) => {
     setBootstrap((current) => {
@@ -548,6 +569,20 @@ function App() {
     setRootOverview(null)
     setSmtpSettings(null)
     setManagedUsers([])
+  }
+
+  const promptPwaInstall = async () => {
+    if (!installPromptEvent) {
+      setInstallHelpOpen(true)
+      return
+    }
+
+    await installPromptEvent.prompt()
+    const choice = await installPromptEvent.userChoice
+    if (choice.outcome !== 'dismissed') {
+      setInstallPromptEvent(null)
+      setInstallHelpOpen(false)
+    }
   }
 
   useEffect(() => {
@@ -608,6 +643,25 @@ function App() {
       document.removeEventListener('keydown', closeAccountMenu)
     }
   }, [accountMenuOpen])
+
+  useEffect(() => {
+    const handleBeforeInstallPrompt = (event: Event) => {
+      event.preventDefault()
+      setInstallPromptEvent(event as BeforeInstallPromptEvent)
+    }
+    const handleAppInstalled = () => {
+      setInstallPromptEvent(null)
+      setInstallHelpOpen(false)
+      setRunningAsInstalledApp(true)
+    }
+
+    window.addEventListener('beforeinstallprompt', handleBeforeInstallPrompt)
+    window.addEventListener('appinstalled', handleAppInstalled)
+    return () => {
+      window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt)
+      window.removeEventListener('appinstalled', handleAppInstalled)
+    }
+  }, [])
 
   const selectedInstitution = useMemo(() => {
     if (!bootstrap?.institutions?.length) {
@@ -1504,6 +1558,11 @@ function App() {
             <>
               <NavLink className={navClass} to="/">Home</NavLink>
               <NavLink className={navClass} to="/login">Sign in</NavLink>
+              {canOfferInstall ? (
+                <button className={installButtonClass} onClick={() => void promptPwaInstall()} type="button">
+                  Install app
+                </button>
+              ) : null}
             </>
           ) : (
             <>
@@ -1522,6 +1581,11 @@ function App() {
                   <NavLink className={navClass} to="/users">Users</NavLink>
                   <NavLink className={navClass} to="/smtp">SMTP</NavLink>
                 </>
+              ) : null}
+              {canOfferInstall ? (
+                <button className={installButtonClass} onClick={() => void promptPwaInstall()} type="button">
+                  Install app
+                </button>
               ) : null}
             </>
           )}
@@ -1544,6 +1608,18 @@ function App() {
                 <NavLink className={navClass} onClick={() => setMobileNavOpen(false)} to="/smtp">SMTP</NavLink>
               </>
             ) : null}
+            {canOfferInstall ? (
+              <button
+                className={installButtonClass}
+                onClick={() => {
+                  setMobileNavOpen(false)
+                  void promptPwaInstall()
+                }}
+                type="button"
+              >
+                Install app
+              </button>
+            ) : null}
             <div className="mt-1 grid gap-2 border-t border-slate-200 pt-3">
               <NavLink className={navClass} onClick={() => setMobileNavOpen(false)} to="/profile">Edit profile</NavLink>
               <button
@@ -1557,6 +1633,31 @@ function App() {
           </nav>
         ) : null}
       </header>
+
+      {installHelpOpen ? (
+        <div className="fixed inset-0 z-50 grid place-items-center bg-slate-950/45 px-4 py-6" role="dialog" aria-modal="true" aria-labelledby="install-help-title">
+          <section className="w-full max-w-md rounded-xl border border-[var(--brand-100)] bg-white p-5 shadow-2xl shadow-slate-900/20">
+            <div className="flex items-start gap-4">
+              <QglimpseLogo className="h-12 w-12 shrink-0" />
+              <div className="min-w-0">
+                <h2 className="text-lg font-semibold text-slate-950" id="install-help-title">Install Qglimpse</h2>
+                <p className="mt-2 text-sm leading-6 text-slate-600">
+                  If your browser does not open an install prompt, use the browser menu and choose Install app, Add to home screen, or Apps.
+                </p>
+              </div>
+            </div>
+            <div className="mt-5 flex flex-col gap-2 sm:flex-row sm:justify-end">
+              <button
+                className="inline-flex min-h-11 items-center justify-center rounded-full bg-[var(--brand-700)] px-4 py-2 text-sm font-semibold text-white hover:bg-[var(--brand-600)]"
+                onClick={() => setInstallHelpOpen(false)}
+                type="button"
+              >
+                Done
+              </button>
+            </div>
+          </section>
+        </div>
+      ) : null}
 
       <main className="mx-auto grid max-w-6xl gap-5 px-4 py-5 sm:gap-6 sm:py-8 md:px-6">
         {error ? <div className="rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-amber-900">{error}</div> : null}

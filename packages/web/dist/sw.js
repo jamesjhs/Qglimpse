@@ -13,8 +13,8 @@ const PRECACHE_URLS = [
   "/icon-192.svg",
   "/icon-512.svg",
   "/maskable-icon.svg",
-  "/assets/index-m8pwAQXj.js",
-  "/assets/index-CazsdIhA.css"
+  "/assets/index-BZ7nH4eA.js",
+  "/assets/index-k6HiL1GV.css"
 ];
 
 self.addEventListener('install', (event) => {

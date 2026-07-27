@@ -1371,6 +1371,7 @@ const isDirectRun = Boolean(process.argv[1]) && import.meta.url === pathToFileUR
 function parseAdminInitArgs(argv) {
     const npmEmail = process.env.npm_config_email;
     const npmPassword = process.env.npm_config_password;
+    const positionalArgs = [];
     const options = {
         email: npmEmail && !['true', 'false'].includes(npmEmail) ? npmEmail : undefined,
         password: npmPassword && !['true', 'false'].includes(npmPassword) ? npmPassword : undefined,
@@ -1385,9 +1386,7 @@ function parseAdminInitArgs(argv) {
     for (let index = 0; index < argv.length; index += 1) {
         const arg = argv[index];
         if (!arg.startsWith('--')) {
-            if (!options.email && arg.includes('@')) {
-                options.email = arg;
-            }
+            positionalArgs.push(arg);
             continue;
         }
         const equalIndex = arg.indexOf('=');
@@ -1413,10 +1412,19 @@ function parseAdminInitArgs(argv) {
             options.mustChangePassword = value === 'true';
         }
     }
+    const [email, password, mustChangePassword] = positionalArgs;
+    options.email ??= email;
+    options.password ??= password;
+    if (mustChangePassword !== undefined) {
+        if (!['true', 'false'].includes(mustChangePassword)) {
+            throw new Error('must-change-password must be true or false.');
+        }
+        options.mustChangePassword = mustChangePassword === 'true';
+    }
     return options;
 }
 function printAdminInitUsage() {
-    console.log('Usage: npm run admin:init -- --email <email> --password <password> [--must-change-password=true|false]');
+    console.log('Usage: npm run admin:init -- <email> <password> [must-change-password true|false]');
 }
 if (isDirectRun) {
     if (process.argv[2] === 'init-admin') {
