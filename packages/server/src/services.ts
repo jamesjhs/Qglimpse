@@ -8,6 +8,7 @@ import {
   registerUser,
   userStatuses,
   type UserRole,
+  type UserStatus,
   type SessionResult,
 } from './auth.js'
 
@@ -21,6 +22,30 @@ export type SmtpSettingsInput = {
 }
 
 const parseOptions = (value: string) => JSON.parse(value) as string[]
+const institutionSelectColumns = `
+  id, name, slug, timezone, status,
+  kiosk_mode_enabled AS kioskModeEnabled,
+  single_question_mode_enabled AS singleQuestionModeEnabled,
+  qr_mode_enabled AS qrModeEnabled,
+  retention_days AS retentionDays,
+  kiosk_idle_reset_seconds AS kioskIdleResetSeconds,
+  kiosk_completion_message AS kioskCompletionMessage,
+  color_scheme AS colorScheme,
+  deactivated_at AS deactivatedAt,
+  created_at AS createdAt
+`
+
+export type InstitutionSettingsInput = {
+  name: string
+  slug: string
+  timezone: string
+  colorScheme?: string
+  singleQuestionModeEnabled?: boolean
+  qrModeEnabled?: boolean
+  retentionDays?: number
+  kioskIdleResetSeconds?: number
+  kioskCompletionMessage?: string
+}
 
 function normalizeEmail(email: string) {
   return email.trim().toLowerCase()
@@ -30,8 +55,7 @@ export function listInstitutions() {
   const db = getDb()
   return db
     .prepare(
-      `SELECT id, name, slug, timezone, kiosk_mode_enabled AS kioskModeEnabled,
-              color_scheme AS colorScheme, created_at AS createdAt
+      `SELECT ${institutionSelectColumns}
        FROM institutions
        ORDER BY name`,
     )
@@ -140,8 +164,7 @@ export function toggleInstitutionKioskMode(id: number, enabled: boolean) {
   db.prepare('UPDATE institutions SET kiosk_mode_enabled = ? WHERE id = ?').run(enabled ? 1 : 0, id)
   return db
     .prepare(
-      `SELECT id, name, slug, timezone, kiosk_mode_enabled AS kioskModeEnabled,
-              color_scheme AS colorScheme, created_at AS createdAt
+      `SELECT ${institutionSelectColumns}
        FROM institutions
        WHERE id = ?`,
     )
@@ -282,20 +305,34 @@ export function confirmEmailVerification(token: string) {
   recordAuditEvent({ action: 'email_verification_completed', metadata: { email: challenge.email } })
 }
 
-export function createInstitution(input: { name: string; slug: string; timezone: string; colorScheme?: string }) {
+export function createInstitution(input: InstitutionSettingsInput) {
   const db = getDb()
   const existing = db.prepare('SELECT id FROM institutions WHERE slug = ?').get(input.slug) as { id: number } | undefined
   if (existing) {
     throw new Error('An institution with this slug already exists.')
   }
   const result = db
-    .prepare('INSERT INTO institutions (name, slug, timezone, kiosk_mode_enabled, color_scheme) VALUES (?, ?, ?, 0, ?)')
-    .run(input.name, input.slug, input.timezone, input.colorScheme ?? 'ocean')
+    .prepare(
+      `INSERT INTO institutions
+         (name, slug, timezone, kiosk_mode_enabled, single_question_mode_enabled, qr_mode_enabled,
+          retention_days, kiosk_idle_reset_seconds, kiosk_completion_message, color_scheme)
+       VALUES (?, ?, ?, 0, ?, ?, ?, ?, ?, ?)`,
+    )
+    .run(
+      input.name,
+      input.slug,
+      input.timezone,
+      input.singleQuestionModeEnabled ? 1 : 0,
+      input.qrModeEnabled ? 1 : 0,
+      input.retentionDays ?? 90,
+      input.kioskIdleResetSeconds ?? 10,
+      input.kioskCompletionMessage?.trim() || 'Your feedback has been recorded.',
+      input.colorScheme ?? 'ocean',
+    )
   const id = Number(result.lastInsertRowid)
   return db
     .prepare(
-      `SELECT id, name, slug, timezone, kiosk_mode_enabled AS kioskModeEnabled,
-              color_scheme AS colorScheme, created_at AS createdAt
+      `SELECT ${institutionSelectColumns}
        FROM institutions
        WHERE id = ?`,
     )
@@ -304,8 +341,15 @@ export function createInstitution(input: { name: string; slug: string; timezone:
     name: string
     slug: string
     timezone: string
+    status: UserStatus
     kioskModeEnabled: number
+    singleQuestionModeEnabled: number
+    qrModeEnabled: number
+    retentionDays: number
+    kioskIdleResetSeconds: number
+    kioskCompletionMessage: string
     colorScheme: string
+    deactivatedAt: string | null
     createdAt: string
   }
 }
@@ -315,8 +359,7 @@ export function getInstitution(id: number) {
   return (
     db
       .prepare(
-        `SELECT id, name, slug, timezone, kiosk_mode_enabled AS kioskModeEnabled,
-                color_scheme AS colorScheme, created_at AS createdAt
+        `SELECT ${institutionSelectColumns}
          FROM institutions
          WHERE id = ?`,
       )
@@ -326,13 +369,20 @@ export function getInstitution(id: number) {
     name: string
     slug: string
     timezone: string
+    status: UserStatus
     kioskModeEnabled: number
+    singleQuestionModeEnabled: number
+    qrModeEnabled: number
+    retentionDays: number
+    kioskIdleResetSeconds: number
+    kioskCompletionMessage: string
     colorScheme: string
+    deactivatedAt: string | null
     createdAt: string
   } | null
 }
 
-export function updateInstitution(id: number, input: { name: string; slug: string; timezone: string; colorScheme?: string }) {
+export function updateInstitution(id: number, input: InstitutionSettingsInput) {
   const db = getDb()
   const institution = db.prepare('SELECT id FROM institutions WHERE id = ?').get(id) as { id: number } | undefined
   if (!institution) {
@@ -344,17 +394,33 @@ export function updateInstitution(id: number, input: { name: string; slug: strin
   if (slugConflict) {
     throw new Error('An institution with this slug already exists.')
   }
-  db.prepare('UPDATE institutions SET name = ?, slug = ?, timezone = ?, color_scheme = ? WHERE id = ?').run(
-    input.name,
-    input.slug,
-    input.timezone,
-    input.colorScheme ?? 'ocean',
-    id,
-  )
+  db.prepare(
+    `UPDATE institutions
+     SET name = ?,
+         slug = ?,
+         timezone = ?,
+         color_scheme = ?,
+         single_question_mode_enabled = ?,
+         qr_mode_enabled = ?,
+         retention_days = ?,
+         kiosk_idle_reset_seconds = ?,
+         kiosk_completion_message = ?
+     WHERE id = ?`,
+  ).run(
+      input.name,
+      input.slug,
+      input.timezone,
+      input.colorScheme ?? 'ocean',
+      input.singleQuestionModeEnabled ? 1 : 0,
+      input.qrModeEnabled ? 1 : 0,
+      input.retentionDays ?? 90,
+      input.kioskIdleResetSeconds ?? 10,
+      input.kioskCompletionMessage?.trim() || 'Your feedback has been recorded.',
+      id,
+    )
   return db
     .prepare(
-      `SELECT id, name, slug, timezone, kiosk_mode_enabled AS kioskModeEnabled,
-              color_scheme AS colorScheme, created_at AS createdAt
+      `SELECT ${institutionSelectColumns}
        FROM institutions
        WHERE id = ?`,
     )
@@ -363,10 +429,41 @@ export function updateInstitution(id: number, input: { name: string; slug: strin
     name: string
     slug: string
     timezone: string
+    status: UserStatus
     kioskModeEnabled: number
+    singleQuestionModeEnabled: number
+    qrModeEnabled: number
+    retentionDays: number
+    kioskIdleResetSeconds: number
+    kioskCompletionMessage: string
     colorScheme: string
+    deactivatedAt: string | null
     createdAt: string
   }
+}
+
+export function updateInstitutionStatus(id: number, status: UserStatus) {
+  const db = getDb()
+  const institution = db.prepare('SELECT id FROM institutions WHERE id = ?').get(id) as { id: number } | undefined
+  if (!institution) {
+    throw new Error('Institution not found.')
+  }
+  db.prepare(
+    `UPDATE institutions
+     SET status = ?,
+         deactivated_at = CASE WHEN ? = 'deactivated' THEN CURRENT_TIMESTAMP ELSE NULL END,
+         kiosk_mode_enabled = CASE WHEN ? = 'active' THEN kiosk_mode_enabled ELSE 0 END
+     WHERE id = ?`,
+  ).run(status, status, status, id)
+  if (status !== 'active') {
+    db.prepare(
+      `UPDATE auth_sessions
+       SET revoked_at = CURRENT_TIMESTAMP
+       WHERE revoked_at IS NULL
+         AND user_id IN (SELECT id FROM users WHERE institution_id = ?)`,
+    ).run(id)
+  }
+  return getInstitution(id)
 }
 
 export function setInstitutionColorScheme(id: number, colorScheme: string) {
@@ -389,7 +486,11 @@ export function deleteInstitution(id: number) {
   if (userCount.count > 0) {
     throw new Error('Cannot delete institution with assigned users.')
   }
-  db.prepare('DELETE FROM institutions WHERE id = ?').run(id)
+  db.transaction(() => {
+    db.prepare('UPDATE audit_events SET institution_id = NULL WHERE institution_id = ?').run(id)
+    db.prepare('DELETE FROM institution_questions WHERE institution_id = ?').run(id)
+    db.prepare('DELETE FROM institutions WHERE id = ?').run(id)
+  })()
 }
 
 export function listInstitutionUsers(institutionId: number) {
@@ -415,7 +516,7 @@ export function createInstitutionUser(
     password: input.password,
     role: (input.role as UserRole) ?? 'institution_user',
     institutionId,
-    mustChangePassword: true,
+    mustChangePassword: input.role !== 'institution_kiosk',
   })
 }
 
@@ -676,7 +777,9 @@ export function getKioskStatus(institutionSlug: string) {
   const db = getDb()
   const row = db
     .prepare(
-      `SELECT id, name, slug, timezone, kiosk_mode_enabled AS kioskModeEnabled, color_scheme AS colorScheme
+      `SELECT id, name, slug, timezone, status, kiosk_mode_enabled AS kioskModeEnabled,
+              color_scheme AS colorScheme, kiosk_idle_reset_seconds AS kioskIdleResetSeconds,
+              kiosk_completion_message AS kioskCompletionMessage
        FROM institutions WHERE slug = ?`,
     )
     .get(institutionSlug) as {
@@ -684,18 +787,23 @@ export function getKioskStatus(institutionSlug: string) {
     name: string
     slug: string
     timezone: string
+    status: UserStatus
     kioskModeEnabled: number
     colorScheme: string
+    kioskIdleResetSeconds: number
+    kioskCompletionMessage: string
   } | undefined
   if (!row) {
     return null
   }
   return {
-    enabled: Boolean(row.kioskModeEnabled),
+    enabled: row.status === 'active' && Boolean(row.kioskModeEnabled),
     institutionId: row.id,
     name: row.name,
     timezone: row.timezone,
     colorScheme: row.colorScheme,
+    kioskIdleResetSeconds: row.kioskIdleResetSeconds,
+    kioskCompletionMessage: row.kioskCompletionMessage,
     questions: getActiveKioskQuestions(row.id),
   }
 }
@@ -703,10 +811,13 @@ export function getKioskStatus(institutionSlug: string) {
 export function startKioskSession(institutionId: number) {
   const db = getDb()
   const institution = db
-    .prepare('SELECT id, kiosk_mode_enabled AS kioskModeEnabled FROM institutions WHERE id = ?')
-    .get(institutionId) as { id: number; kioskModeEnabled: number } | undefined
+    .prepare('SELECT id, status, kiosk_mode_enabled AS kioskModeEnabled FROM institutions WHERE id = ?')
+    .get(institutionId) as { id: number; status: UserStatus; kioskModeEnabled: number } | undefined
   if (!institution) {
     throw new Error('Institution not found.')
+  }
+  if (institution.status !== 'active') {
+    throw new Error('Institution is not active.')
   }
   if (!institution.kioskModeEnabled) {
     throw new Error('Kiosk mode is not enabled for this institution.')

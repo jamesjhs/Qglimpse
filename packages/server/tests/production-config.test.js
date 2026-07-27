@@ -65,5 +65,43 @@ test('production database startup records schema version and does not seed live 
 
   assert.equal(result.status, 0, result.stderr)
   const output = JSON.parse(result.stdout.trim())
-  assert.deepEqual(output, { users: 0, version: 2 })
+  assert.deepEqual(output, { users: 0, version: 3 })
+})
+
+test('production database startup migrates legacy auth session idle timestamps', () => {
+  const env = productionEnv()
+  const result = runInline(
+    `
+      const Database = (await import('better-sqlite3-multiple-ciphers')).default
+      const legacyDb = new Database(process.env.QUICKGLIMPSE_DB_PATH)
+      legacyDb.exec(\`
+        CREATE TABLE auth_sessions (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          user_id INTEGER NOT NULL,
+          token_hash TEXT NOT NULL UNIQUE,
+          expires_at TEXT NOT NULL,
+          revoked_at TEXT,
+          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        INSERT INTO auth_sessions (user_id, token_hash, expires_at, created_at)
+        VALUES (1, 'legacy-token-hash', '2099-01-01T00:00:00.000Z', '2026-01-01 00:00:00');
+      \`)
+      legacyDb.close()
+
+      const { getDb } = await import('./dist/db.js')
+      const db = getDb()
+      const columns = db.prepare('PRAGMA table_info(auth_sessions)').all()
+      const row = db.prepare("SELECT last_seen_at AS lastSeenAt FROM auth_sessions WHERE token_hash = 'legacy-token-hash'").get()
+      console.log(JSON.stringify({
+        hasLastSeenAt: columns.some((column) => column.name === 'last_seen_at'),
+        lastSeenAt: row.lastSeenAt,
+      }))
+      db.close()
+    `,
+    env,
+  )
+
+  assert.equal(result.status, 0, result.stderr)
+  const output = JSON.parse(result.stdout.trim())
+  assert.deepEqual(output, { hasLastSeenAt: true, lastSeenAt: '2026-01-01 00:00:00' })
 })

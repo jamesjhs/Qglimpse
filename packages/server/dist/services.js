@@ -6,14 +6,25 @@ import { sendOperationalEmail } from './mailer.js';
 import { recordAuditEvent } from './audit.js';
 import { registerUser, userStatuses, } from './auth.js';
 const parseOptions = (value) => JSON.parse(value);
+const institutionSelectColumns = `
+  id, name, slug, timezone, status,
+  kiosk_mode_enabled AS kioskModeEnabled,
+  single_question_mode_enabled AS singleQuestionModeEnabled,
+  qr_mode_enabled AS qrModeEnabled,
+  retention_days AS retentionDays,
+  kiosk_idle_reset_seconds AS kioskIdleResetSeconds,
+  kiosk_completion_message AS kioskCompletionMessage,
+  color_scheme AS colorScheme,
+  deactivated_at AS deactivatedAt,
+  created_at AS createdAt
+`;
 function normalizeEmail(email) {
     return email.trim().toLowerCase();
 }
 export function listInstitutions() {
     const db = getDb();
     return db
-        .prepare(`SELECT id, name, slug, timezone, kiosk_mode_enabled AS kioskModeEnabled,
-              color_scheme AS colorScheme, created_at AS createdAt
+        .prepare(`SELECT ${institutionSelectColumns}
        FROM institutions
        ORDER BY name`)
         .all();
@@ -84,8 +95,7 @@ export function toggleInstitutionKioskMode(id, enabled) {
     const db = getDb();
     db.prepare('UPDATE institutions SET kiosk_mode_enabled = ? WHERE id = ?').run(enabled ? 1 : 0, id);
     return db
-        .prepare(`SELECT id, name, slug, timezone, kiosk_mode_enabled AS kioskModeEnabled,
-              color_scheme AS colorScheme, created_at AS createdAt
+        .prepare(`SELECT ${institutionSelectColumns}
        FROM institutions
        WHERE id = ?`)
         .get(id);
@@ -199,12 +209,14 @@ export function createInstitution(input) {
         throw new Error('An institution with this slug already exists.');
     }
     const result = db
-        .prepare('INSERT INTO institutions (name, slug, timezone, kiosk_mode_enabled, color_scheme) VALUES (?, ?, ?, 0, ?)')
-        .run(input.name, input.slug, input.timezone, input.colorScheme ?? 'ocean');
+        .prepare(`INSERT INTO institutions
+         (name, slug, timezone, kiosk_mode_enabled, single_question_mode_enabled, qr_mode_enabled,
+          retention_days, kiosk_idle_reset_seconds, kiosk_completion_message, color_scheme)
+       VALUES (?, ?, ?, 0, ?, ?, ?, ?, ?, ?)`)
+        .run(input.name, input.slug, input.timezone, input.singleQuestionModeEnabled ? 1 : 0, input.qrModeEnabled ? 1 : 0, input.retentionDays ?? 90, input.kioskIdleResetSeconds ?? 10, input.kioskCompletionMessage?.trim() || 'Your feedback has been recorded.', input.colorScheme ?? 'ocean');
     const id = Number(result.lastInsertRowid);
     return db
-        .prepare(`SELECT id, name, slug, timezone, kiosk_mode_enabled AS kioskModeEnabled,
-              color_scheme AS colorScheme, created_at AS createdAt
+        .prepare(`SELECT ${institutionSelectColumns}
        FROM institutions
        WHERE id = ?`)
         .get(id);
@@ -212,8 +224,7 @@ export function createInstitution(input) {
 export function getInstitution(id) {
     const db = getDb();
     return (db
-        .prepare(`SELECT id, name, slug, timezone, kiosk_mode_enabled AS kioskModeEnabled,
-                color_scheme AS colorScheme, created_at AS createdAt
+        .prepare(`SELECT ${institutionSelectColumns}
          FROM institutions
          WHERE id = ?`)
         .get(id) ?? null);
@@ -230,13 +241,41 @@ export function updateInstitution(id, input) {
     if (slugConflict) {
         throw new Error('An institution with this slug already exists.');
     }
-    db.prepare('UPDATE institutions SET name = ?, slug = ?, timezone = ?, color_scheme = ? WHERE id = ?').run(input.name, input.slug, input.timezone, input.colorScheme ?? 'ocean', id);
+    db.prepare(`UPDATE institutions
+     SET name = ?,
+         slug = ?,
+         timezone = ?,
+         color_scheme = ?,
+         single_question_mode_enabled = ?,
+         qr_mode_enabled = ?,
+         retention_days = ?,
+         kiosk_idle_reset_seconds = ?,
+         kiosk_completion_message = ?
+     WHERE id = ?`).run(input.name, input.slug, input.timezone, input.colorScheme ?? 'ocean', input.singleQuestionModeEnabled ? 1 : 0, input.qrModeEnabled ? 1 : 0, input.retentionDays ?? 90, input.kioskIdleResetSeconds ?? 10, input.kioskCompletionMessage?.trim() || 'Your feedback has been recorded.', id);
     return db
-        .prepare(`SELECT id, name, slug, timezone, kiosk_mode_enabled AS kioskModeEnabled,
-              color_scheme AS colorScheme, created_at AS createdAt
+        .prepare(`SELECT ${institutionSelectColumns}
        FROM institutions
        WHERE id = ?`)
         .get(id);
+}
+export function updateInstitutionStatus(id, status) {
+    const db = getDb();
+    const institution = db.prepare('SELECT id FROM institutions WHERE id = ?').get(id);
+    if (!institution) {
+        throw new Error('Institution not found.');
+    }
+    db.prepare(`UPDATE institutions
+     SET status = ?,
+         deactivated_at = CASE WHEN ? = 'deactivated' THEN CURRENT_TIMESTAMP ELSE NULL END,
+         kiosk_mode_enabled = CASE WHEN ? = 'active' THEN kiosk_mode_enabled ELSE 0 END
+     WHERE id = ?`).run(status, status, status, id);
+    if (status !== 'active') {
+        db.prepare(`UPDATE auth_sessions
+       SET revoked_at = CURRENT_TIMESTAMP
+       WHERE revoked_at IS NULL
+         AND user_id IN (SELECT id FROM users WHERE institution_id = ?)`).run(id);
+    }
+    return getInstitution(id);
 }
 export function setInstitutionColorScheme(id, colorScheme) {
     const db = getDb();
@@ -257,7 +296,11 @@ export function deleteInstitution(id) {
     if (userCount.count > 0) {
         throw new Error('Cannot delete institution with assigned users.');
     }
-    db.prepare('DELETE FROM institutions WHERE id = ?').run(id);
+    db.transaction(() => {
+        db.prepare('UPDATE audit_events SET institution_id = NULL WHERE institution_id = ?').run(id);
+        db.prepare('DELETE FROM institution_questions WHERE institution_id = ?').run(id);
+        db.prepare('DELETE FROM institutions WHERE id = ?').run(id);
+    })();
 }
 export function listInstitutionUsers(institutionId) {
     const db = getDb();
@@ -276,7 +319,7 @@ export function createInstitutionUser(institutionId, input) {
         password: input.password,
         role: input.role ?? 'institution_user',
         institutionId,
-        mustChangePassword: true,
+        mustChangePassword: input.role !== 'institution_kiosk',
     });
 }
 export function listQuestionTemplates() {
@@ -461,28 +504,35 @@ export function getActiveKioskQuestions(institutionId) {
 export function getKioskStatus(institutionSlug) {
     const db = getDb();
     const row = db
-        .prepare(`SELECT id, name, slug, timezone, kiosk_mode_enabled AS kioskModeEnabled, color_scheme AS colorScheme
+        .prepare(`SELECT id, name, slug, timezone, status, kiosk_mode_enabled AS kioskModeEnabled,
+              color_scheme AS colorScheme, kiosk_idle_reset_seconds AS kioskIdleResetSeconds,
+              kiosk_completion_message AS kioskCompletionMessage
        FROM institutions WHERE slug = ?`)
         .get(institutionSlug);
     if (!row) {
         return null;
     }
     return {
-        enabled: Boolean(row.kioskModeEnabled),
+        enabled: row.status === 'active' && Boolean(row.kioskModeEnabled),
         institutionId: row.id,
         name: row.name,
         timezone: row.timezone,
         colorScheme: row.colorScheme,
+        kioskIdleResetSeconds: row.kioskIdleResetSeconds,
+        kioskCompletionMessage: row.kioskCompletionMessage,
         questions: getActiveKioskQuestions(row.id),
     };
 }
 export function startKioskSession(institutionId) {
     const db = getDb();
     const institution = db
-        .prepare('SELECT id, kiosk_mode_enabled AS kioskModeEnabled FROM institutions WHERE id = ?')
+        .prepare('SELECT id, status, kiosk_mode_enabled AS kioskModeEnabled FROM institutions WHERE id = ?')
         .get(institutionId);
     if (!institution) {
         throw new Error('Institution not found.');
+    }
+    if (institution.status !== 'active') {
+        throw new Error('Institution is not active.');
     }
     if (!institution.kioskModeEnabled) {
         throw new Error('Kiosk mode is not enabled for this institution.');

@@ -97,7 +97,6 @@ Current implementation includes a React/Vite web app, an Express API, PM2 config
 Known pre-production gaps:
 
 - Single-use QR submission is not implemented.
-- Institution general users do not yet have the intended question-bank permissions.
 - Single-question mode is not enforced as a product invariant.
 - XLSX export is not implemented.
 - The PWA manifest exists, but service worker/cache update behaviour is not implemented.
@@ -192,6 +191,8 @@ GDPR and data protection requirements:
 
 ### Phase 0: Product Reset and Scope Lock
 
+Status: Completed.
+
 Goal: remove hallucinated assumptions and make the intended product contract explicit.
 
 Work:
@@ -211,6 +212,8 @@ Exit criteria:
 - The repo has no Docker deployment instructions or Docker artifacts.
 
 ### Phase 1: Production Configuration and Encrypted Persistence
+
+Status: Completed.
 
 Goal: make the server fail closed and protect data at rest.
 
@@ -233,6 +236,8 @@ Exit criteria:
 
 ### Phase 2: Authentication, 2FA, and Account Lifecycle
 
+Status: Completed.
+
 Goal: replace preview-mode auth with real account security.
 
 Work:
@@ -254,6 +259,8 @@ Exit criteria:
 
 ### Phase 3: Institution and User Administration
 
+Status: Completed.
+
 Goal: make multi-institution management safe and complete.
 
 Work:
@@ -273,6 +280,8 @@ Exit criteria:
 
 ### Phase 4: Question Bank and Scheduling
 
+Status: Not complete. Single-question mode is not yet enforced as a product invariant.
+
 Goal: make Qglimpse's single-question feedback method the core product behaviour.
 
 Work:
@@ -291,6 +300,8 @@ Exit criteria:
 - Demographic prompts are skippable and never required for feedback submission.
 
 ### Phase 5: Kiosk Runtime and Single-Use QR
+
+Status: Not complete. Kiosk sessions exist, but single-use QR submission is not implemented.
 
 Goal: build the real guest-facing collection surface.
 
@@ -313,6 +324,8 @@ Exit criteria:
 
 ### Phase 6: Analytics, Exports, and Retention
 
+Status: Not complete. Analytics and retention cleanup exist, but XLSX exports are not implemented.
+
 Goal: provide useful institution insight without leaking personal or cross-institution data.
 
 Work:
@@ -334,6 +347,8 @@ Exit criteria:
 
 ### Phase 7: PWA Installability and Cache Versioning
 
+Status: Not complete. The manifest exists, but service-worker cache update behaviour is not implemented.
+
 Goal: satisfy installable PWA shell requirements without adding unnecessary push technology.
 
 Work:
@@ -352,6 +367,8 @@ Exit criteria:
 - Users are never stuck on an old app shell after deployment.
 
 ### Phase 8: Production Hardening and Compliance
+
+Status: Not complete. Several hardening and compliance pieces are in place, but later-phase blockers still prevent this phase from exiting.
 
 Goal: remove the last pre-production risks.
 
@@ -374,6 +391,8 @@ Exit criteria:
 - No placeholder legal/security text remains.
 
 ### Phase 9: Release Candidate and Institutional Pilot
+
+Status: Not complete. This waits on completion of Phases 3-8.
 
 Goal: validate the complete product with realistic institutional workflows before wider use.
 

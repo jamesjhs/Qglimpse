@@ -72,7 +72,7 @@ test('database startup applies encryption key and converts existing plaintext st
     const institution = keyed.prepare('SELECT slug FROM institutions ORDER BY id LIMIT 1').get()
     assert.equal(institution.slug, 'downtown-clinic')
     const migration = keyed.prepare('SELECT version FROM schema_migrations ORDER BY version DESC LIMIT 1').get()
-    assert.equal(migration.version, 2)
+    assert.equal(migration.version, 3)
   } finally {
     keyed.close()
   }

@@ -7,8 +7,15 @@ type Institution = {
   name: string
   slug: string
   timezone: string
+  status: 'active' | 'suspended' | 'deactivated'
   kioskModeEnabled: number
+  singleQuestionModeEnabled: number
+  qrModeEnabled: number
+  retentionDays: number
+  kioskIdleResetSeconds: number
+  kioskCompletionMessage: string
   colorScheme: 'ocean' | 'emerald' | 'sunset' | 'violet'
+  deactivatedAt: string | null
   createdAt: string
 }
 
@@ -126,6 +133,14 @@ type AuthUser = {
   institutionId: number | null
 }
 
+type ManagedUser = AuthUser & {
+  createdAt: string
+  lastLoginAt: string | null
+  deactivatedAt: string | null
+  twoFaEnabled?: number
+  mustChangePassword?: number
+}
+
 type TurnstileWidgetId = string | number
 
 type PasswordInputProps = {
@@ -135,6 +150,7 @@ type PasswordInputProps = {
 }
 
 const publicPaths = new Set(['/', '/login', '/auth-core', '/help', '/privacy', '/dpia', '/magic-link'])
+const authStorageKey = 'qglimpse-auth'
 const routeAliases: Record<string, string> = {
   '/app': '/',
   '/institution': '/institutions',
@@ -150,6 +166,14 @@ function sanitizeRedirectPath(value: string | null) {
   }
   const aliasedPathname = routeAliases[target.pathname] ?? target.pathname
   return `${aliasedPathname}${target.search}${target.hash}`
+}
+
+function friendlyDisplayError(message: string) {
+  if (message === 'Invalid user payload.') {
+    return 'Please check the new user details. The email, temporary password, role, and institution all need valid values.'
+  }
+
+  return message
 }
 
 declare global {
@@ -332,6 +356,7 @@ function App() {
   const [searchParams] = useSearchParams()
   const [bootstrap, setBootstrap] = useState<BootstrapPayload | null>(null)
   const [loading, setLoading] = useState(true)
+  const [restoringSession, setRestoringSession] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [passwordResetMessage, setPasswordResetMessage] = useState<string | null>(null)
   const [savingSmtp, setSavingSmtp] = useState(false)
@@ -342,6 +367,7 @@ function App() {
   const [pendingTwoFa, setPendingTwoFa] = useState<TwoFaPending | null>(null)
   const [mustChangePw, setMustChangePw] = useState(false)
   const [institutionList, setInstitutionList] = useState<Institution[]>([])
+  const [managedUsers, setManagedUsers] = useState<ManagedUser[]>([])
   const [turnstileToken, setTurnstileToken] = useState('')
   const [turnstileResetSignal, setTurnstileResetSignal] = useState(0)
   const [interestTurnstileToken, setInterestTurnstileToken] = useState('')
@@ -365,7 +391,6 @@ function App() {
   const [analyticsTo, setAnalyticsTo] = useState(() => new Date().toISOString().slice(0, 10))
   const [smtpTestAddress, setSmtpTestAddress] = useState('')
   const [smtpTestResult, setSmtpTestResult] = useState<string | null>(null)
-  const [savingColorSchemeFor, setSavingColorSchemeFor] = useState<number | null>(null)
   const [kioskState, setKioskState] = useState<'landing' | 'questions' | 'demographics' | 'thankyou'>('landing')
   const [kioskSessionToken, setKioskSessionToken] = useState<string | null>(null)
   const [kioskQuestions, setKioskQuestions] = useState<Question[]>([])
@@ -381,6 +406,7 @@ function App() {
   const [crossTabPrimary, setCrossTabPrimary] = useState('')
   const [crossTabDemo, setCrossTabDemo] = useState('')
   const [crossTabData, setCrossTabData] = useState<Array<{ primaryAnswer: string; demoAnswer: string; count: number | '< 5' }> | null>(null)
+  const sessionRestoreChecked = useRef(false)
   const kioskPromptQuestions = useMemo(() => kioskQuestions.filter((q) => !q.isDemographic), [kioskQuestions])
   const kioskDemographicQuestions = useMemo(() => kioskQuestions.filter((q) => q.isDemographic), [kioskQuestions])
   const requiresTurnstileWidget = Boolean(bootstrap?.authCore.turnstileSiteKey && bootstrap.authCore.turnstileRequired)
@@ -388,6 +414,47 @@ function App() {
   const requestedRedirectPath = sanitizeRedirectPath(searchParams.get('next'))
   const authRedirectPath = `/login?next=${encodeURIComponent(currentPath)}`
   const isPublicPath = publicPaths.has(location.pathname)
+
+  const upsertDisplayedInstitution = (institution: Institution) => {
+    setBootstrap((current) => {
+      if (!current) return current
+      const exists = current.institutions.some((item) => item.id === institution.id)
+      return {
+        ...current,
+        institutions: exists
+          ? current.institutions.map((item) => (item.id === institution.id ? institution : item))
+          : [...current.institutions, institution],
+      }
+    })
+    setInstitutionList((current) => {
+      const exists = current.some((item) => item.id === institution.id)
+      return exists ? current.map((item) => (item.id === institution.id ? institution : item)) : [...current, institution]
+    })
+  }
+
+  const removeDisplayedInstitution = (institutionId: number) => {
+    setBootstrap((current) =>
+      current
+        ? {
+            ...current,
+            institutions: current.institutions.filter((institution) => institution.id !== institutionId),
+          }
+        : current,
+    )
+    setInstitutionList((current) => current.filter((institution) => institution.id !== institutionId))
+    setInstitutionQuestions((current) => current.filter((question) => question.institutionId !== institutionId))
+  }
+
+  const clearAuthenticatedSession = () => {
+    window.localStorage.removeItem(authStorageKey)
+    setAuthToken('')
+    setSessionUser(null)
+    setMustChangePw(false)
+    setPendingTwoFa(null)
+    setRootOverview(null)
+    setSmtpSettings(null)
+    setManagedUsers([])
+  }
 
   useEffect(() => {
     const load = async () => {
@@ -498,17 +565,7 @@ function App() {
       }
 
       const updated = (await response.json()) as Institution
-      setBootstrap((current) => {
-        if (!current) {
-          return current
-        }
-
-        const institutions = current.institutions.map((item) => (item.id === updated.id ? updated : item))
-        return {
-          ...current,
-          institutions,
-        }
-      })
+      upsertDisplayedInstitution(updated)
       setRootOverview((current) =>
         current
           ? {
@@ -522,40 +579,33 @@ function App() {
     }
   }
 
-  const updateInstitutionColorScheme = async (institution: Institution, colorScheme: InstitutionColorScheme) => {
-    if (!authToken) {
-      setError('Login first to manage institutional colour scheme.')
-      return
-    }
+  const saveInstitutionSettings = async (event: FormEvent<HTMLFormElement>, institution: Institution) => {
+    event.preventDefault()
+    if (!authToken) return
     setError(null)
-    setSavingColorSchemeFor(institution.id)
-    try {
-      const response = await fetch(`/api/institutions/${institution.id}/color-scheme`, {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${authToken}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ colorScheme }),
-      })
-      if (!response.ok) {
-        const result = (await response.json()) as { error?: string }
-        throw new Error(result.error ?? 'Unable to update colour scheme.')
-      }
-      const updated = (await response.json()) as Institution
-      setBootstrap((current) => {
-        if (!current) return current
-        return {
-          ...current,
-          institutions: current.institutions.map((item) => (item.id === updated.id ? updated : item)),
-        }
-      })
-      setInstitutionList((current) => current.map((item) => (item.id === updated.id ? updated : item)))
-    } catch (caughtError) {
-      setError(caughtError instanceof Error ? caughtError.message : 'Unable to update colour scheme.')
-    } finally {
-      setSavingColorSchemeFor(null)
+    const formData = new FormData(event.currentTarget)
+    const payload = {
+      name: String(formData.get('name') ?? institution.name),
+      slug: String(formData.get('slug') ?? institution.slug),
+      timezone: String(formData.get('timezone') ?? institution.timezone),
+      colorScheme: String(formData.get('colorScheme') ?? institution.colorScheme),
+      singleQuestionModeEnabled: formData.get('singleQuestionModeEnabled') === 'true',
+      qrModeEnabled: formData.get('qrModeEnabled') === 'true',
+      retentionDays: Number(formData.get('retentionDays') ?? institution.retentionDays),
+      kioskIdleResetSeconds: Number(formData.get('kioskIdleResetSeconds') ?? institution.kioskIdleResetSeconds),
+      kioskCompletionMessage: String(formData.get('kioskCompletionMessage') ?? institution.kioskCompletionMessage),
     }
+    const response = await fetch(`/api/institutions/${institution.id}`, {
+      method: 'PUT',
+      headers: { Authorization: `Bearer ${authToken}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    })
+    if (!response.ok) {
+      const result = (await response.json()) as { error?: string }
+      throw new Error(result.error ?? 'Unable to save institution settings.')
+    }
+    const updated = (await response.json()) as Institution
+    upsertDisplayedInstitution(updated)
   }
 
   const loadRootOverview = async (token: string) => {
@@ -589,9 +639,28 @@ function App() {
     })
   }
 
+  const loadInstitutionList = async (token: string) => {
+    const response = await fetch('/api/institutions', {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+    if (!response.ok) return
+    const result = (await response.json()) as { institutions: Institution[] }
+    setInstitutionList(result.institutions)
+    setBootstrap((current) => (current ? { ...current, institutions: result.institutions } : current))
+  }
+
+  const loadManagedUsers = async (token: string) => {
+    const response = await fetch('/api/auth/users', {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+    if (!response.ok) return
+    const result = (await response.json()) as { users: ManagedUser[] }
+    setManagedUsers(result.users)
+  }
+
   const loadAuthenticatedWorkspace = async (token: string, user: AuthUser) => {
     if (user.role === 'root') {
-      await Promise.all([loadRootOverview(token), loadSmtpSettings(token), loadInstitutionList(token)])
+      await Promise.all([loadRootOverview(token), loadSmtpSettings(token), loadInstitutionList(token), loadManagedUsers(token)])
     }
   }
 
@@ -605,13 +674,83 @@ function App() {
     setAuthToken(session.token)
     setSessionUser(session.user)
     setMustChangePw(session.mustChangePassword)
+    window.localStorage.setItem(authStorageKey, JSON.stringify({ token: session.token }))
     if (session.mustChangePassword) {
       return
     }
     await loadAuthenticatedWorkspace(session.token, session.user)
-    const redirectPath = requestedRedirectPath === '/' ? (session.redirectPath ?? defaultRedirectForRole(session.user.role)) : requestedRedirectPath
+    const redirectPath =
+      session.user.role === 'institution_kiosk'
+        ? '/kiosk'
+        : requestedRedirectPath === '/'
+          ? (session.redirectPath ?? defaultRedirectForRole(session.user.role))
+          : requestedRedirectPath
     navigate(redirectPath, { replace: true })
   }
+
+  const logout = async () => {
+    const token = authToken
+    clearAuthenticatedSession()
+    if (token) {
+      await fetch('/api/auth/logout', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+      }).catch(() => undefined)
+    }
+    navigate('/login', { replace: true })
+  }
+
+  useEffect(() => {
+    if (loading || sessionRestoreChecked.current) return
+    sessionRestoreChecked.current = true
+
+    const restoreSession = async () => {
+      const stored = window.localStorage.getItem(authStorageKey)
+      if (!stored) {
+        setRestoringSession(false)
+        return
+      }
+
+      try {
+        const parsed = JSON.parse(stored) as { token?: unknown }
+        const token = typeof parsed.token === 'string' ? parsed.token : ''
+        if (!token) {
+          throw new Error('Stored session is missing a token.')
+        }
+
+        const response = await fetch('/api/auth/session', {
+          headers: { Authorization: `Bearer ${token}` },
+        })
+        if (!response.ok) {
+          throw new Error('Stored session is invalid or expired.')
+        }
+
+        const session = (await response.json()) as {
+          token?: string
+          expiresAt: string
+          user: AuthUser
+          mustChangePassword?: boolean
+          redirectPath?: string
+        }
+        const restoredToken = session.token ?? token
+        setAuthToken(restoredToken)
+        setSessionUser(session.user)
+        setMustChangePw(Boolean(session.mustChangePassword))
+        window.localStorage.setItem(authStorageKey, JSON.stringify({ token: restoredToken }))
+        if (!session.mustChangePassword) {
+          await loadAuthenticatedWorkspace(restoredToken, session.user)
+        }
+      } catch {
+        clearAuthenticatedSession()
+      } finally {
+        setRestoringSession(false)
+      }
+    }
+
+    void restoreSession()
+    // Session restore is a guarded one-shot; rerunning it when loader helpers are recreated would be noisy.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loading])
 
   const saveSmtpSettings = async (event: FormEvent<HTMLFormElement>) => {
     if (!authToken) {
@@ -811,15 +950,6 @@ function App() {
     }
   }
 
-  const loadInstitutionList = async (token: string) => {
-    const response = await fetch('/api/institutions', {
-      headers: { Authorization: `Bearer ${token}` },
-    })
-    if (!response.ok) return
-    const result = (await response.json()) as { institutions: Institution[] }
-    setInstitutionList(result.institutions)
-  }
-
   const createInstitution = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
     if (!authToken) return
@@ -835,7 +965,8 @@ function App() {
       throw new Error(result.error ?? 'Unable to create institution.')
     }
     const inst = (await response.json()) as Institution
-    setInstitutionList((current) => [...current, inst])
+    upsertDisplayedInstitution(inst)
+    await loadRootOverview(authToken)
     event.currentTarget.reset()
   }
 
@@ -850,7 +981,73 @@ function App() {
       const result = (await response.json()) as { error?: string }
       throw new Error(result.error ?? 'Unable to delete institution.')
     }
-    setInstitutionList((current) => current.filter((inst) => inst.id !== id))
+    removeDisplayedInstitution(id)
+    await loadRootOverview(authToken)
+  }
+
+  const createManagedUser = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    if (!authToken) return
+    setError(null)
+    const form = event.currentTarget
+    const formData = new FormData(form)
+    const institutionId = Number(formData.get('institutionId') ?? 0)
+    const response = await fetch(`/api/institutions/${institutionId}/users`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${authToken}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        email: String(formData.get('email') ?? ''),
+        password: String(formData.get('password') ?? ''),
+        role: String(formData.get('role') ?? 'institution_user'),
+      }),
+    })
+    if (!response.ok) {
+      const result = (await response.json()) as { error?: string }
+      throw new Error(friendlyDisplayError(result.error ?? 'Unable to create user.'))
+    }
+    await loadManagedUsers(authToken)
+    await loadRootOverview(authToken)
+    form.reset()
+  }
+
+  const updateManagedUser = async (event: FormEvent<HTMLFormElement>, user: ManagedUser) => {
+    event.preventDefault()
+    if (!authToken) return
+    setError(null)
+    const formData = new FormData(event.currentTarget)
+    const rawInstitutionId = String(formData.get('institutionId') ?? '')
+    const response = await fetch(`/api/auth/users/${user.id}`, {
+      method: 'PATCH',
+      headers: { Authorization: `Bearer ${authToken}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        email: String(formData.get('email') ?? user.email),
+        role: String(formData.get('role') ?? user.role),
+        institutionId: rawInstitutionId ? Number(rawInstitutionId) : null,
+        status: String(formData.get('status') ?? user.status),
+      }),
+    })
+    if (!response.ok) {
+      const result = (await response.json()) as { error?: string }
+      throw new Error(result.error ?? 'Unable to update user.')
+    }
+    const result = (await response.json()) as { user: ManagedUser }
+    setManagedUsers((current) => current.map((item) => (item.id === result.user.id ? result.user : item)))
+    await loadRootOverview(authToken)
+  }
+
+  const deleteManagedUser = async (user: ManagedUser) => {
+    if (!authToken) return
+    setError(null)
+    const response = await fetch(`/api/auth/users/${user.id}`, {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${authToken}` },
+    })
+    if (!response.ok) {
+      const result = (await response.json()) as { error?: string }
+      throw new Error(result.error ?? 'Unable to delete user.')
+    }
+    setManagedUsers((current) => current.filter((item) => item.id !== user.id))
+    await loadRootOverview(authToken)
   }
 
   const loadInstitutionQuestions = async (institutionId: number, token: string) => {
@@ -1073,7 +1270,7 @@ function App() {
     setKioskCountdown(10)
   }
 
-  if (loading) {
+  if (loading || restoringSession) {
     return <div className="mx-auto flex min-h-screen max-w-6xl items-center justify-center px-6">Loading Qglimpse...</div>
   }
 
@@ -1083,6 +1280,10 @@ function App() {
 
   if (sessionUser && mustChangePw) {
     return renderRequiredPasswordChange()
+  }
+
+  if (sessionUser?.role === 'institution_kiosk' && location.pathname !== '/kiosk') {
+    return <Navigate to="/kiosk" replace />
   }
 
   return (
@@ -1134,17 +1335,23 @@ function App() {
           ) : (
             <>
               <NavLink className={navClass} to="/">Overview</NavLink>
-              <NavLink className={navClass} to="/profile">Profile</NavLink>
-              <NavLink className={navClass} to="/institutions">Institutions</NavLink>
               {sessionUser.role === 'institution_kiosk' ? <NavLink className={navClass} to="/kiosk">Kiosk</NavLink> : null}
-              <NavLink className={navClass} to="/questions">Questions</NavLink>
-              <NavLink className={navClass} to="/analytics">Analytics</NavLink>
+              {sessionUser.role !== 'institution_kiosk' ? (
+                <>
+                  <NavLink className={navClass} to="/profile">Profile</NavLink>
+                  <NavLink className={navClass} to="/institutions">Institutions</NavLink>
+                  <NavLink className={navClass} to="/questions">Questions</NavLink>
+                  <NavLink className={navClass} to="/analytics">Analytics</NavLink>
+                </>
+              ) : null}
               {sessionUser.role === 'root' ? (
                 <>
                   <NavLink className={navClass} to="/root">Root</NavLink>
+                  <NavLink className={navClass} to="/users">Users</NavLink>
                   <NavLink className={navClass} to="/smtp">SMTP</NavLink>
                 </>
               ) : null}
+              <button className={navClass({ isActive: false })} onClick={() => void logout()} type="button">Logout</button>
             </>
           )}
         </div>
@@ -1387,14 +1594,20 @@ function App() {
                 ) : null}
                 <div className="grid gap-4 md:grid-cols-2">
                   {bootstrap.institutions.map((institution) => (
-                    <article className={statCardClass} key={institution.id}>
+                    <article
+                      className={statCardClass}
+                      key={`${institution.id}:${institution.name}:${institution.slug}:${institution.timezone}:${institution.colorScheme}:${institution.retentionDays}:${institution.kioskIdleResetSeconds}:${institution.kioskCompletionMessage}:${institution.singleQuestionModeEnabled}:${institution.qrModeEnabled}`}
+                    >
                       <div className="flex flex-wrap items-start justify-between gap-4">
                         <div>
                           <p className="text-xs font-semibold uppercase tracking-[0.2em] text-[var(--brand-700)]">Institution</p>
                           <h2 className="mt-2 text-xl font-semibold">{institution.name}</h2>
                           <p className="mt-2 text-sm text-slate-600">Slug: {institution.slug}</p>
                           <p className="mt-1 text-sm text-slate-600">Timezone: {institution.timezone}</p>
+                          <p className="mt-1 text-sm text-slate-600">Status: {institution.status}</p>
                           <p className="mt-1 text-sm text-slate-600">Theme: {institutionColorSchemes[institution.colorScheme]?.label ?? institution.colorScheme}</p>
+                          <p className="mt-1 text-sm text-slate-600">Retention: {institution.retentionDays} days</p>
+                          <p className="mt-1 text-sm text-slate-600">Single question: {institution.singleQuestionModeEnabled ? 'On' : 'Off'} · QR: {institution.qrModeEnabled ? 'On' : 'Off'}</p>
                         </div>
                         <button
                           className={`rounded-full px-4 py-2 text-sm font-semibold ${institution.kioskModeEnabled ? 'bg-[var(--brand-600)] text-white' : 'bg-slate-200 text-slate-900'}`}
@@ -1405,26 +1618,135 @@ function App() {
                         </button>
                       </div>
                       {sessionUser?.role === 'root' || (sessionUser?.role === 'institution_admin' && sessionUser.institutionId === institution.id) ? (
-                        <div className="mt-4 flex flex-wrap items-center gap-3">
-                          <label className="text-sm font-medium text-slate-700">Institution colour scheme</label>
-                          <select
-                            className="rounded-xl border border-slate-300 px-3 py-2 text-sm"
-                            disabled={savingColorSchemeFor === institution.id}
-                            value={institution.colorScheme}
-                            onChange={(event) => void updateInstitutionColorScheme(institution, event.target.value as InstitutionColorScheme)}
-                          >
-                            {Object.entries(institutionColorSchemes).map(([value, scheme]) => (
-                              <option key={value} value={value}>
-                                {scheme.label}
-                              </option>
-                            ))}
-                          </select>
-                        </div>
+                        <form className="mt-4 grid gap-3 border-t border-slate-100 pt-4" onSubmit={(event) => void saveInstitutionSettings(event, institution).catch((err: unknown) => setError(err instanceof Error ? err.message : 'Save failed.'))}>
+                          <div className="grid gap-3 sm:grid-cols-2">
+                            <label className="grid gap-1 text-sm font-medium">
+                              Name
+                              <input className="rounded-xl border border-slate-300 px-3 py-2" defaultValue={institution.name} name="name" required />
+                            </label>
+                            <label className="grid gap-1 text-sm font-medium">
+                              Slug
+                              <input className="rounded-xl border border-slate-300 px-3 py-2" defaultValue={institution.slug} name="slug" required />
+                            </label>
+                            <label className="grid gap-1 text-sm font-medium">
+                              Timezone
+                              <input className="rounded-xl border border-slate-300 px-3 py-2" defaultValue={institution.timezone} name="timezone" required />
+                            </label>
+                            <label className="grid gap-1 text-sm font-medium">
+                              Theme
+                              <select className="rounded-xl border border-slate-300 px-3 py-2" defaultValue={institution.colorScheme} name="colorScheme">
+                                {Object.entries(institutionColorSchemes).map(([value, scheme]) => (
+                                  <option key={value} value={value}>{scheme.label}</option>
+                                ))}
+                              </select>
+                            </label>
+                            <label className="grid gap-1 text-sm font-medium">
+                              Retention days
+                              <input className="rounded-xl border border-slate-300 px-3 py-2" defaultValue={institution.retentionDays} max="90" min="1" name="retentionDays" type="number" />
+                            </label>
+                            <label className="grid gap-1 text-sm font-medium">
+                              Kiosk reset seconds
+                              <input className="rounded-xl border border-slate-300 px-3 py-2" defaultValue={institution.kioskIdleResetSeconds} max="300" min="5" name="kioskIdleResetSeconds" type="number" />
+                            </label>
+                          </div>
+                          <label className="grid gap-1 text-sm font-medium">
+                            Completion message
+                            <input className="rounded-xl border border-slate-300 px-3 py-2" defaultValue={institution.kioskCompletionMessage} maxLength={240} name="kioskCompletionMessage" />
+                          </label>
+                          <div className="flex flex-wrap gap-4 text-sm">
+                            <label className="flex items-center gap-2 font-medium">
+                              <input name="singleQuestionModeEnabled" type="hidden" value="false" />
+                              <input defaultChecked={Boolean(institution.singleQuestionModeEnabled)} name="singleQuestionModeEnabled" type="checkbox" value="true" />
+                              Single-question mode
+                            </label>
+                            <label className="flex items-center gap-2 font-medium">
+                              <input name="qrModeEnabled" type="hidden" value="false" />
+                              <input defaultChecked={Boolean(institution.qrModeEnabled)} name="qrModeEnabled" type="checkbox" value="true" />
+                              QR mode
+                            </label>
+                          </div>
+                          <button className="w-fit rounded-full bg-slate-900 px-4 py-2 text-sm font-semibold text-white" type="submit">Save settings</button>
+                        </form>
                       ) : null}
                     </article>
                   ))}
                 </div>
               </section>,
+            )}
+          />
+          <Route
+            path="/users"
+            element={requireSession(
+              sessionUser?.role === 'root' ? (
+                <section className="grid gap-6">
+                  <article className={statCardClass}>
+                    <h2 className="text-xl font-semibold">Create institution user</h2>
+                    <form className="mt-4 grid gap-4 md:grid-cols-[1fr_1fr_1fr_1fr_auto]" onSubmit={(event) => void createManagedUser(event).catch((err: unknown) => setError(err instanceof Error ? err.message : 'Create failed.'))}>
+                      <input className="rounded-xl border border-slate-300 px-3 py-2" name="email" placeholder="Email" required type="email" />
+                      <label className="grid gap-1">
+                        <span className="sr-only">Temporary password</span>
+                        <input className="rounded-xl border border-slate-300 px-3 py-2" minLength={10} name="password" placeholder="Temporary password" required type="password" />
+                        <span className="text-xs text-slate-500">At least 10 characters.</span>
+                      </label>
+                      <select className="rounded-xl border border-slate-300 px-3 py-2" name="role" defaultValue="institution_user">
+                        <option value="institution_admin">Institution admin</option>
+                        <option value="institution_user">Institution user</option>
+                        <option value="institution_kiosk">Kiosk user</option>
+                      </select>
+                      <select className="rounded-xl border border-slate-300 px-3 py-2" name="institutionId" required>
+                        <option value="">Institution</option>
+                        {bootstrap.institutions.map((institution) => (
+                          <option key={institution.id} value={institution.id}>{institution.name}</option>
+                        ))}
+                      </select>
+                      <button className="rounded-full bg-slate-900 px-4 py-2 text-sm font-semibold text-white" type="submit">Create</button>
+                    </form>
+                  </article>
+                  <article className={statCardClass}>
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <h2 className="text-xl font-semibold">Users</h2>
+                      {authToken ? (
+                        <button className="rounded-full bg-slate-200 px-4 py-2 text-sm font-semibold text-slate-700" onClick={() => void loadManagedUsers(authToken)} type="button">Reload</button>
+                      ) : null}
+                    </div>
+                    <div className="mt-4 grid gap-3">
+                      {managedUsers.map((user) => (
+                        <form className="grid gap-3 rounded-xl border border-slate-200 bg-slate-50 p-4 lg:grid-cols-[1.5fr_1fr_1fr_1fr_auto_auto]" key={`${user.id}:${user.email}:${user.role}:${user.institutionId ?? 'none'}:${user.status}`} onSubmit={(event) => void updateManagedUser(event, user).catch((err: unknown) => setError(err instanceof Error ? err.message : 'Update failed.'))}>
+                          <input className="rounded-xl border border-slate-300 px-3 py-2" defaultValue={user.email} name="email" type="email" />
+                          <select className="rounded-xl border border-slate-300 px-3 py-2" defaultValue={user.role} disabled={user.role === 'root'} name="role">
+                            <option value="root">Root</option>
+                            <option value="institution_admin">Institution admin</option>
+                            <option value="institution_user">Institution user</option>
+                            <option value="institution_kiosk">Kiosk user</option>
+                          </select>
+                          <select className="rounded-xl border border-slate-300 px-3 py-2" defaultValue={user.institutionId ?? ''} disabled={user.role === 'root'} name="institutionId">
+                            <option value="">Unassigned</option>
+                            {bootstrap.institutions.map((institution) => (
+                              <option key={institution.id} value={institution.id}>{institution.name}</option>
+                            ))}
+                          </select>
+                          <select className="rounded-xl border border-slate-300 px-3 py-2" defaultValue={user.status} disabled={user.role === 'root'} name="status">
+                            <option value="active">Active</option>
+                            <option value="suspended">Suspended</option>
+                            <option value="deactivated">Deactivated</option>
+                          </select>
+                          <button className="rounded-full bg-slate-900 px-4 py-2 text-sm font-semibold text-white" type="submit">Save</button>
+                          <button
+                            className="rounded-full bg-red-100 px-4 py-2 text-sm font-semibold text-red-700 ring-1 ring-red-300 disabled:cursor-not-allowed disabled:opacity-50"
+                            disabled={user.role === 'root'}
+                            onClick={() => void deleteManagedUser(user).catch((err: unknown) => setError(err instanceof Error ? err.message : 'Delete failed.'))}
+                            type="button"
+                          >
+                            Delete
+                          </button>
+                        </form>
+                      ))}
+                    </div>
+                  </article>
+                </section>
+              ) : (
+                <Navigate to="/" replace />
+              ),
             )}
           />
           <Route
@@ -2139,7 +2461,6 @@ function KioskFullScreen(props: KioskFullScreenProps) {
           >
             Start feedback
           </button>
-          <a href="/" className="text-sm text-slate-500 underline underline-offset-4">Return to dashboard</a>
         </div>
       ) : kioskState === 'questions' && currentQuestion ? (
         <div className="w-full max-w-xl">

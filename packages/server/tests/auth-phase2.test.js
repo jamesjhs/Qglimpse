@@ -90,6 +90,36 @@ test('role-aware login routes kiosk users to kiosk and blocks staff APIs', async
   })
   assert.equal(staffApi.response.status, 403)
 
+  const profileEdit = await api('/api/auth/profile', {
+    method: 'PATCH',
+    headers: {
+      Authorization: `Bearer ${session.token}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ email: 'kiosk-edited@example.com' }),
+  })
+  assert.equal(profileEdit.response.status, 403)
+
+  const passwordEdit = await api('/api/auth/profile/password', {
+    method: 'PATCH',
+    headers: {
+      Authorization: `Bearer ${session.token}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ currentPassword: 'Password1234!', newPassword: 'Password5678!' }),
+  })
+  assert.equal(passwordEdit.response.status, 403)
+
+  const twoFaEdit = await api(`/api/auth/users/${session.user.id}/2fa`, {
+    method: 'PATCH',
+    headers: {
+      Authorization: `Bearer ${session.token}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ enabled: true }),
+  })
+  assert.equal(twoFaEdit.response.status, 403)
+
   const kioskSession = await api('/api/kiosk/downtown-clinic/session', {
     method: 'POST',
     headers: { Authorization: `Bearer ${session.token}` },

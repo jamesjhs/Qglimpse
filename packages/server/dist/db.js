@@ -5,7 +5,7 @@ import { config } from './config.js';
 import { demographicsTemplates, insightTemplates } from './data/demographics.js';
 let database;
 const sqlitePlaintextHeader = Buffer.from('SQLite format 3\0');
-const currentSchemaVersion = 2;
+const currentSchemaVersion = 3;
 function isPlaintextSqliteDatabase(databasePath) {
     if (!existsSync(databasePath) || statSync(databasePath).size < sqlitePlaintextHeader.length) {
         return false;
@@ -61,8 +61,15 @@ function runMigrations(db) {
       name TEXT NOT NULL,
       slug TEXT NOT NULL UNIQUE,
       timezone TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'active',
       kiosk_mode_enabled INTEGER NOT NULL DEFAULT 0,
+      single_question_mode_enabled INTEGER NOT NULL DEFAULT 0,
+      qr_mode_enabled INTEGER NOT NULL DEFAULT 0,
+      retention_days INTEGER NOT NULL DEFAULT 90,
+      kiosk_idle_reset_seconds INTEGER NOT NULL DEFAULT 10,
+      kiosk_completion_message TEXT NOT NULL DEFAULT 'Your feedback has been recorded.',
       color_scheme TEXT NOT NULL DEFAULT 'ocean',
+      deactivated_at TEXT,
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
 
@@ -208,14 +215,40 @@ function runMigrations(db) {
         .all();
     const sessionColNames = new Set(sessionColumns.map((c) => c.name));
     if (!sessionColNames.has('last_seen_at')) {
-        db.exec(`ALTER TABLE auth_sessions ADD COLUMN last_seen_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP;`);
+        db.exec(`
+      ALTER TABLE auth_sessions ADD COLUMN last_seen_at TEXT;
+      UPDATE auth_sessions
+      SET last_seen_at = COALESCE(created_at, CURRENT_TIMESTAMP)
+      WHERE last_seen_at IS NULL;
+    `);
     }
     const institutionColumns = db
         .prepare(`PRAGMA table_info(institutions)`)
         .all();
     const institutionColNames = new Set(institutionColumns.map((column) => column.name));
+    if (!institutionColNames.has('status')) {
+        db.exec(`ALTER TABLE institutions ADD COLUMN status TEXT NOT NULL DEFAULT 'active';`);
+    }
     if (!institutionColNames.has('color_scheme')) {
         db.exec(`ALTER TABLE institutions ADD COLUMN color_scheme TEXT NOT NULL DEFAULT 'ocean';`);
+    }
+    if (!institutionColNames.has('single_question_mode_enabled')) {
+        db.exec(`ALTER TABLE institutions ADD COLUMN single_question_mode_enabled INTEGER NOT NULL DEFAULT 0;`);
+    }
+    if (!institutionColNames.has('qr_mode_enabled')) {
+        db.exec(`ALTER TABLE institutions ADD COLUMN qr_mode_enabled INTEGER NOT NULL DEFAULT 0;`);
+    }
+    if (!institutionColNames.has('retention_days')) {
+        db.exec(`ALTER TABLE institutions ADD COLUMN retention_days INTEGER NOT NULL DEFAULT 90;`);
+    }
+    if (!institutionColNames.has('kiosk_idle_reset_seconds')) {
+        db.exec(`ALTER TABLE institutions ADD COLUMN kiosk_idle_reset_seconds INTEGER NOT NULL DEFAULT 10;`);
+    }
+    if (!institutionColNames.has('kiosk_completion_message')) {
+        db.exec(`ALTER TABLE institutions ADD COLUMN kiosk_completion_message TEXT NOT NULL DEFAULT 'Your feedback has been recorded.';`);
+    }
+    if (!institutionColNames.has('deactivated_at')) {
+        db.exec(`ALTER TABLE institutions ADD COLUMN deactivated_at TEXT;`);
     }
     const iqColumns = db
         .prepare(`PRAGMA table_info(institution_questions)`)

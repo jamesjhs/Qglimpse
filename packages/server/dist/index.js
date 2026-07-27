@@ -5,8 +5,8 @@ import { existsSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
-import { authenticateSession, changeRequiredPassword, changeOwnPassword, confirmPasswordReset, ensureInitialAdminLogin, ensureSeedCredentials, listUsers, loginUser, logoutSession, registerUser, toggle2FA, updateUserEmail, updateUserStatus, userRoles, userStatuses, verifyMagicLinkChallenge, verifyOtpChallenge, verifyTurnstileToken, } from './auth.js';
-import { buildBootstrapPayload, confirmEmailVerification, createCustomQuestion, createInstitution, createInstitutionUser, createLoginChallenge, deleteCustomQuestion, deleteInstitution, getInstitution, getInstitutionAnalytics, getInstitutionQuestions, getCrossTabulation, getKioskStatus, getRootOverview, getSmtpSettings, listInstitutions, listInstitutionUsers, listQuestionTemplates, requestEmailVerification, requestPasswordReset, runRetentionCleanup, sendTestSmtpEmail, setInstitutionColorScheme, startKioskSession, submitKioskAnswer, completeKioskSession, toggleInstitutionKioskMode, updateInstitution, updateInstitutionQuestion, updateSmtpSettings, } from './services.js';
+import { authenticateSession, changeRequiredPassword, changeOwnPassword, confirmPasswordReset, ensureInitialAdminLogin, deleteManagedUser, ensureSeedCredentials, listUsers, loginUser, logoutSession, registerUser, toggle2FA, updateManagedUser, updateUserEmail, updateUserStatus, userRoles, userStatuses, verifyMagicLinkChallenge, verifyOtpChallenge, verifyTurnstileToken, } from './auth.js';
+import { buildBootstrapPayload, confirmEmailVerification, createCustomQuestion, createInstitution, createInstitutionUser, createLoginChallenge, deleteCustomQuestion, deleteInstitution, getInstitution, getInstitutionAnalytics, getInstitutionQuestions, getCrossTabulation, getKioskStatus, getRootOverview, getSmtpSettings, listInstitutions, listInstitutionUsers, listQuestionTemplates, requestEmailVerification, requestPasswordReset, runRetentionCleanup, sendTestSmtpEmail, setInstitutionColorScheme, startKioskSession, submitKioskAnswer, completeKioskSession, toggleInstitutionKioskMode, updateInstitution, updateInstitutionQuestion, updateInstitutionStatus, updateSmtpSettings, } from './services.js';
 import { config } from './config.js';
 import { getDb } from './db.js';
 import { sendOperationalEmail } from './mailer.js';
@@ -53,6 +53,12 @@ const institutionInterestSchema = z.object({
 const updateUserStatusSchema = z.object({
     status: z.enum(userStatuses),
 });
+const updateManagedUserSchema = z.object({
+    email: z.string().email(),
+    role: z.enum(userRoles),
+    institutionId: z.number().int().positive().nullable(),
+    status: z.enum(userStatuses),
+});
 const changePasswordSchema = z.object({
     currentPassword: z.string().min(1).optional(),
     newPassword: z.string().min(10),
@@ -87,6 +93,14 @@ const institutionSchema = z.object({
         .optional(),
     timezone: z.string().trim().min(1).default('UTC'),
     colorScheme: z.enum(['ocean', 'emerald', 'sunset', 'violet']).default('ocean'),
+    singleQuestionModeEnabled: z.boolean().default(false),
+    qrModeEnabled: z.boolean().default(false),
+    retentionDays: z.coerce.number().int().min(1).max(90).default(90),
+    kioskIdleResetSeconds: z.coerce.number().int().min(5).max(300).default(10),
+    kioskCompletionMessage: z.string().trim().min(1).max(240).default('Your feedback has been recorded.'),
+});
+const institutionStatusSchema = z.object({
+    status: z.enum(userStatuses),
 });
 const institutionColorSchemeSchema = z.object({
     colorScheme: z.enum(['ocean', 'emerald', 'sunset', 'violet']),
@@ -96,6 +110,20 @@ const createInstitutionUserSchema = z.object({
     password: z.string().min(10),
     role: z.enum(['institution_admin', 'institution_user', 'institution_kiosk']).default('institution_user'),
 });
+function formatCreateInstitutionUserValidationError(error) {
+    const issue = error.issues[0];
+    const field = issue?.path[0];
+    if (field === 'email') {
+        return 'Please enter a valid email address for the new user.';
+    }
+    if (field === 'password') {
+        return 'Please enter a temporary password that is at least 10 characters long.';
+    }
+    if (field === 'role') {
+        return 'Choose a valid role for the new user.';
+    }
+    return 'Please check the create user form and try again.';
+}
 const updateQuestionSchema = z.object({
     includeInKiosk: z.boolean().optional(),
     isDemographic: z.boolean().optional(),
@@ -295,6 +323,34 @@ function getRoleRedirectPath(role) {
     }
     return '/app';
 }
+function hasInstitutionScope(user, institutionId) {
+    return user.role === 'root' || user.institutionId === institutionId;
+}
+function canManageInstitutionSettings(user, institutionId) {
+    return user.role === 'root' || (user.role === 'institution_admin' && user.institutionId === institutionId);
+}
+function canManageQuestionBank(user, institutionId) {
+    return (user.role === 'root' ||
+        ((user.role === 'institution_admin' || user.role === 'institution_user') && user.institutionId === institutionId));
+}
+function getManagedUserAccess(actor, targetUserId, input) {
+    if (actor.role === 'root') {
+        return { allowed: true, institutionId: input?.institutionId ?? null };
+    }
+    if (actor.role !== 'institution_admin' || !actor.institutionId) {
+        return { allowed: false, institutionId: null };
+    }
+    const target = getDb()
+        .prepare('SELECT role, institution_id AS institutionId FROM users WHERE id = ?')
+        .get(targetUserId);
+    if (!target || target.role === 'root' || target.institutionId !== actor.institutionId) {
+        return { allowed: false, institutionId: null };
+    }
+    if (input && (input.role === 'root' || input.institutionId !== actor.institutionId)) {
+        return { allowed: false, institutionId: null };
+    }
+    return { allowed: true, institutionId: actor.institutionId };
+}
 export function createApp() {
     const app = express();
     app.disable('x-powered-by');
@@ -356,7 +412,7 @@ export function createApp() {
         next();
     });
     app.use((req, res, next) => {
-        if (!/^\/api\/(root|settings|institutions|question-templates)(\/|$)/.test(req.path)) {
+        if (!/^\/api\/(root|settings|institutions|question-templates|auth\/users|auth\/profile)(\/|$)/.test(req.path)) {
             return next();
         }
         const token = extractBearerToken(req.header('authorization'));
@@ -616,6 +672,73 @@ export function createApp() {
             return res.status(400).json({ error: error instanceof Error ? error.message : 'Unable to update user status.' });
         }
     });
+    app.patch('/api/auth/users/:id', authCoreLimiter, (req, res) => {
+        const auth = getAuthenticatedSession(req, res);
+        if (!auth) {
+            return;
+        }
+        const userId = parseNumericId(req.params.id);
+        if (!userId) {
+            return res.status(400).json({ error: 'Invalid user id.' });
+        }
+        const parsed = updateManagedUserSchema.safeParse(req.body);
+        if (!parsed.success) {
+            return res.status(400).json({ error: 'Invalid user payload.' });
+        }
+        const access = getManagedUserAccess(auth.session.user, userId, parsed.data);
+        if (!access.allowed) {
+            return res.status(403).json({ error: 'Institution admin or root access required.' });
+        }
+        try {
+            const user = updateManagedUser(userId, parsed.data);
+            recordAuditEvent({
+                action: 'user_updated',
+                actor: auth.session.user,
+                targetUserId: user.id,
+                institutionId: user.institutionId ?? access.institutionId,
+                metadata: {
+                    role: user.role,
+                    status: user.status,
+                    institutionId: user.institutionId,
+                },
+            });
+            return res.json({ user });
+        }
+        catch (error) {
+            const msg = error instanceof Error ? error.message : 'Unable to update user.';
+            const status = msg === 'User not found.' || msg === 'Institution not found.' ? 404 : 400;
+            return res.status(status).json({ error: msg });
+        }
+    });
+    app.delete('/api/auth/users/:id', authCoreLimiter, (req, res) => {
+        const auth = getAuthenticatedSession(req, res);
+        if (!auth) {
+            return;
+        }
+        const userId = parseNumericId(req.params.id);
+        if (!userId) {
+            return res.status(400).json({ error: 'Invalid user id.' });
+        }
+        const access = getManagedUserAccess(auth.session.user, userId);
+        if (!access.allowed) {
+            return res.status(403).json({ error: 'Institution admin or root access required.' });
+        }
+        try {
+            deleteManagedUser(userId);
+            recordAuditEvent({
+                action: 'user_deleted',
+                actor: auth.session.user,
+                institutionId: access.institutionId,
+                metadata: { deletedUserId: userId },
+            });
+            return res.status(204).send();
+        }
+        catch (error) {
+            const msg = error instanceof Error ? error.message : 'Unable to delete user.';
+            const status = msg === 'User not found.' ? 404 : 400;
+            return res.status(status).json({ error: msg });
+        }
+    });
     app.post('/api/auth/challenges', authChallengeLimiter, async (req, res) => {
         const parsed = loginChallengeSchema.safeParse(req.body);
         if (!parsed.success) {
@@ -807,6 +930,9 @@ export function createApp() {
         if (!institutionId) {
             return res.status(400).json({ error: 'Invalid institution id.' });
         }
+        if (!hasInstitutionScope(auth.session.user, institutionId)) {
+            return res.status(403).json({ error: 'Institution-scoped access required.' });
+        }
         const institution = getInstitution(institutionId);
         if (!institution) {
             return res.status(404).json({ error: 'Institution not found.' });
@@ -818,12 +944,12 @@ export function createApp() {
         if (!auth) {
             return;
         }
-        if (auth.session.user.role !== 'root') {
-            return res.status(403).json({ error: 'Root access required.' });
-        }
         const institutionId = parseNumericId(req.params.id);
         if (!institutionId) {
             return res.status(400).json({ error: 'Invalid institution id.' });
+        }
+        if (!canManageInstitutionSettings(auth.session.user, institutionId)) {
+            return res.status(403).json({ error: 'Institution admin access required.' });
         }
         const parsed = institutionSchema.safeParse(req.body);
         if (!parsed.success) {
@@ -841,6 +967,38 @@ export function createApp() {
             });
         }
     });
+    app.patch('/api/institutions/:id/status', privilegedOpsLimiter, (req, res) => {
+        const auth = getAuthenticatedSession(req, res);
+        if (!auth) {
+            return;
+        }
+        if (auth.session.user.role !== 'root') {
+            return res.status(403).json({ error: 'Root access required.' });
+        }
+        const institutionId = parseNumericId(req.params.id);
+        if (!institutionId) {
+            return res.status(400).json({ error: 'Invalid institution id.' });
+        }
+        const parsed = institutionStatusSchema.safeParse(req.body);
+        if (!parsed.success) {
+            return res.status(400).json({ error: 'Invalid institution status payload.' });
+        }
+        try {
+            const institution = updateInstitutionStatus(institutionId, parsed.data.status);
+            recordAuditEvent({
+                action: 'institution_status_changed',
+                actor: auth.session.user,
+                institutionId,
+                metadata: { status: parsed.data.status },
+            });
+            return res.json(institution);
+        }
+        catch (error) {
+            return res.status(error instanceof Error && error.message === 'Institution not found.' ? 404 : 400).json({
+                error: error instanceof Error ? error.message : 'Unable to update institution status.',
+            });
+        }
+    });
     app.delete('/api/institutions/:id', privilegedOpsLimiter, (req, res) => {
         const auth = getAuthenticatedSession(req, res);
         if (!auth) {
@@ -855,7 +1013,11 @@ export function createApp() {
         }
         try {
             deleteInstitution(institutionId);
-            recordAuditEvent({ action: 'institution_deleted', actor: auth.session.user, institutionId });
+            recordAuditEvent({
+                action: 'institution_deleted',
+                actor: auth.session.user,
+                metadata: { deletedInstitutionId: institutionId },
+            });
             return res.status(204).send();
         }
         catch (error) {
@@ -898,7 +1060,7 @@ export function createApp() {
         }
         const parsed = createInstitutionUserSchema.safeParse(req.body);
         if (!parsed.success) {
-            return res.status(400).json({ error: 'Invalid user payload.' });
+            return res.status(400).json({ error: formatCreateInstitutionUserValidationError(parsed.error) });
         }
         try {
             const user = createInstitutionUser(institutionId, parsed.data);
@@ -909,7 +1071,7 @@ export function createApp() {
                 institutionId,
                 metadata: { created: true, role: user.role },
             });
-            return res.status(201).json({ ...user, mustChangePassword: true });
+            return res.status(201).json({ ...user, mustChangePassword: parsed.data.role !== 'institution_kiosk' });
         }
         catch (error) {
             return res.status(400).json({ error: error instanceof Error ? error.message : 'Unable to create user.' });
@@ -919,13 +1081,10 @@ export function createApp() {
         const auth = getAuthenticatedSession(req, res);
         if (!auth)
             return;
-        if (!['root', 'institution_admin'].includes(auth.session.user.role)) {
-            return res.status(403).json({ error: 'Admin access required.' });
-        }
         const institutionId = parseNumericId(req.params.id);
         if (!institutionId)
             return res.status(400).json({ error: 'Invalid institution id.' });
-        if (auth.session.user.role === 'institution_admin' && auth.session.user.institutionId !== institutionId) {
+        if (!canManageQuestionBank(auth.session.user, institutionId)) {
             return res.status(403).json({ error: 'Institution-scoped access required.' });
         }
         return res.json({ questions: getInstitutionQuestions(institutionId) });
@@ -934,14 +1093,11 @@ export function createApp() {
         const auth = getAuthenticatedSession(req, res);
         if (!auth)
             return;
-        if (!['root', 'institution_admin'].includes(auth.session.user.role)) {
-            return res.status(403).json({ error: 'Admin access required.' });
-        }
         const institutionId = parseNumericId(req.params.id);
         const questionId = parseNumericId(req.params.questionId);
         if (!institutionId || !questionId)
             return res.status(400).json({ error: 'Invalid id.' });
-        if (auth.session.user.role === 'institution_admin' && auth.session.user.institutionId !== institutionId) {
+        if (!canManageQuestionBank(auth.session.user, institutionId)) {
             return res.status(403).json({ error: 'Institution-scoped access required.' });
         }
         const parsed = updateQuestionSchema.safeParse(req.body);
@@ -960,13 +1116,10 @@ export function createApp() {
         const auth = getAuthenticatedSession(req, res);
         if (!auth)
             return;
-        if (!['root', 'institution_admin'].includes(auth.session.user.role)) {
-            return res.status(403).json({ error: 'Admin access required.' });
-        }
         const institutionId = parseNumericId(req.params.id);
         if (!institutionId)
             return res.status(400).json({ error: 'Invalid institution id.' });
-        if (auth.session.user.role === 'institution_admin' && auth.session.user.institutionId !== institutionId) {
+        if (!canManageQuestionBank(auth.session.user, institutionId)) {
             return res.status(403).json({ error: 'Institution-scoped access required.' });
         }
         const parsed = createQuestionSchema.safeParse(req.body);
@@ -990,14 +1143,11 @@ export function createApp() {
         const auth = getAuthenticatedSession(req, res);
         if (!auth)
             return;
-        if (!['root', 'institution_admin'].includes(auth.session.user.role)) {
-            return res.status(403).json({ error: 'Admin access required.' });
-        }
         const institutionId = parseNumericId(req.params.id);
         const questionId = parseNumericId(req.params.questionId);
         if (!institutionId || !questionId)
             return res.status(400).json({ error: 'Invalid id.' });
-        if (auth.session.user.role === 'institution_admin' && auth.session.user.institutionId !== institutionId) {
+        if (!canManageQuestionBank(auth.session.user, institutionId)) {
             return res.status(403).json({ error: 'Institution-scoped access required.' });
         }
         try {

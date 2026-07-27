@@ -123,8 +123,8 @@ function validateProductionConfig(input: {
     throw new Error('QUICKGLIMPSE_SESSION_SECRET must be at least 32 characters in production.')
   }
   assertNotPlaceholder('QUICKGLIMPSE_SESSION_SECRET', input.sessionSecret, ['change-me-session-secret', 'changeme'])
-  if (input.sessionTtlMs <= 0 || input.sessionTtlMs > 7 * 24 * 60 * 60 * 1000) {
-    throw new Error('QUICKGLIMPSE_SESSION_TTL_MS must be between 1 ms and 7 days in production.')
+  if (input.sessionTtlMs <= 0 || input.sessionTtlMs > 30 * 24 * 60 * 60 * 1000) {
+    throw new Error('QUICKGLIMPSE_SESSION_TTL_MS must be between 1 ms and 30 days in production.')
   }
   if (input.sessionIdleTtlMs <= 0 || input.sessionIdleTtlMs > input.sessionTtlMs) {
     throw new Error('QUICKGLIMPSE_SESSION_IDLE_TTL_MS must be positive and no greater than QUICKGLIMPSE_SESSION_TTL_MS in production.')
@@ -159,7 +159,7 @@ const sessionSecret = isProduction
 const sessionTtlMs = requireIntegerEnv('QUICKGLIMPSE_SESSION_TTL_MS')
 const sessionIdleTtlMs = process.env.QUICKGLIMPSE_SESSION_IDLE_TTL_MS
   ? requireIntegerEnv('QUICKGLIMPSE_SESSION_IDLE_TTL_MS')
-  : Math.min(sessionTtlMs, 30 * 60 * 1000)
+  : Math.min(sessionTtlMs, 30 * 24 * 60 * 60 * 1000)
 const smtpSeed = {
   username: requireProductionEnv('SMTP_USERNAME'),
   password: requireProductionEnv('SMTP_PASSWORD'),

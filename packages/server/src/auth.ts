@@ -21,6 +21,7 @@ type UserRow = {
   deactivatedAt: string | null
   twoFaEnabled?: number
   mustChangePassword?: number
+  institutionStatus?: UserStatus | null
 }
 
 export type SessionUser = {
@@ -218,9 +219,11 @@ export function loginUser(input: { email: string; password: string; ip?: string 
          u.deactivated_at AS deactivatedAt,
          u.two_fa_enabled AS twoFaEnabled,
          c.password_hash AS passwordHash,
-         c.must_change_password AS mustChangePassword
+         c.must_change_password AS mustChangePassword,
+         i.status AS institutionStatus
        FROM users u
        JOIN user_credentials c ON c.user_id = u.id
+       LEFT JOIN institutions i ON i.id = u.institution_id
        WHERE u.email = ?`,
     )
     .get(email) as (UserRow & { passwordHash: string }) | undefined
@@ -235,6 +238,11 @@ export function loginUser(input: { email: string; password: string; ip?: string 
     recordLoginAttempt(email, input.ip, false)
     recordAuditEvent({ action: 'login_failed', targetUserId: row.id, metadata: { reason: row.status } })
     throw new Error(`Account is ${row.status}.`)
+  }
+  if (row.role !== 'root' && row.institutionStatus !== 'active') {
+    recordLoginAttempt(email, input.ip, false)
+    recordAuditEvent({ action: 'login_failed', targetUserId: row.id, metadata: { reason: 'institution_inactive' } })
+    throw new Error('Institution is not active.')
   }
 
   if (row.twoFaEnabled) {
@@ -273,10 +281,12 @@ export function authenticateSession(token: string) {
          u.institution_id AS institutionId
        FROM auth_sessions s
        JOIN users u ON u.id = s.user_id
+       LEFT JOIN institutions i ON i.id = u.institution_id
        WHERE s.token_hash = ?
          AND s.revoked_at IS NULL
          AND datetime(s.expires_at) > datetime('now')
-         AND datetime(s.last_seen_at) > datetime(?)`,
+         AND datetime(s.last_seen_at) > datetime(?)
+         AND (u.role = 'root' OR i.status = 'active')`,
     )
     .get(hashToken(token), getIdleCutoffIso()) as
     | {
@@ -295,11 +305,15 @@ export function authenticateSession(token: string) {
     return null
   }
 
-  db.prepare('UPDATE auth_sessions SET last_seen_at = CURRENT_TIMESTAMP WHERE id = ?').run(row.sessionId)
+  const refreshedExpiresAt = getSessionExpiryIso()
+  db.prepare('UPDATE auth_sessions SET expires_at = ?, last_seen_at = CURRENT_TIMESTAMP WHERE id = ?').run(
+    refreshedExpiresAt,
+    row.sessionId,
+  )
 
   return {
     sessionId: row.sessionId,
-    expiresAt: row.expiresAt,
+    expiresAt: refreshedExpiresAt,
     user: {
       id: row.id,
       email: row.email,
@@ -374,6 +388,84 @@ export function updateUserStatus(id: number, status: UserStatus) {
        WHERE id = ?`,
     )
     .get(id) as UserRow
+}
+
+export function updateManagedUser(
+  id: number,
+  input: { email: string; role: UserRole; institutionId: number | null; status: UserStatus },
+) {
+  const db = getDb()
+  const existing = db.prepare('SELECT id, role FROM users WHERE id = ?').get(id) as { id: number; role: UserRole } | undefined
+  if (!existing) {
+    throw new Error('User not found.')
+  }
+  if (existing.role === 'root' && input.role !== 'root') {
+    throw new Error('Root account role cannot be changed.')
+  }
+  if (input.role === 'root' && input.institutionId !== null) {
+    throw new Error('Root users cannot be assigned to an institution.')
+  }
+  if (input.role !== 'root' && input.institutionId !== null) {
+    const institution = db.prepare('SELECT id FROM institutions WHERE id = ?').get(input.institutionId) as
+      | { id: number }
+      | undefined
+    if (!institution) {
+      throw new Error('Institution not found.')
+    }
+  }
+  if (input.role !== 'root' && input.institutionId === null && input.status === 'active') {
+    throw new Error('Unassigned institution users must be suspended or deactivated.')
+  }
+  if (input.role === 'root' && input.status !== 'active') {
+    throw new Error('Root account cannot be disabled.')
+  }
+
+  const email = normalizeEmail(input.email)
+  const emailConflict = db.prepare('SELECT id FROM users WHERE email = ? AND id != ?').get(email, id) as
+    | { id: number }
+    | undefined
+  if (emailConflict) {
+    throw new Error('A user with this email already exists.')
+  }
+
+  db.prepare(
+    `UPDATE users
+     SET email = ?,
+         role = ?,
+         institution_id = ?,
+         status = ?,
+         deactivated_at = CASE WHEN ? = 'deactivated' THEN CURRENT_TIMESTAMP ELSE NULL END
+     WHERE id = ?`,
+  ).run(email, input.role, input.institutionId, input.status, input.status, id)
+
+  db.prepare('UPDATE auth_sessions SET revoked_at = CURRENT_TIMESTAMP WHERE user_id = ? AND revoked_at IS NULL').run(id)
+
+  return db
+    .prepare(
+      `SELECT id, email, role, status, institution_id AS institutionId, created_at AS createdAt,
+              last_login_at AS lastLoginAt, deactivated_at AS deactivatedAt
+       FROM users
+       WHERE id = ?`,
+    )
+    .get(id) as UserRow
+}
+
+export function deleteManagedUser(id: number) {
+  const db = getDb()
+  const user = db.prepare('SELECT id, role FROM users WHERE id = ?').get(id) as { id: number; role: UserRole } | undefined
+  if (!user) {
+    throw new Error('User not found.')
+  }
+  if (user.role === 'root') {
+    throw new Error('Root account cannot be deleted.')
+  }
+  db.transaction(() => {
+    db.prepare('UPDATE audit_events SET actor_user_id = NULL WHERE actor_user_id = ?').run(id)
+    db.prepare('UPDATE audit_events SET target_user_id = NULL WHERE target_user_id = ?').run(id)
+    db.prepare('DELETE FROM auth_sessions WHERE user_id = ?').run(id)
+    db.prepare('DELETE FROM user_credentials WHERE user_id = ?').run(id)
+    db.prepare('DELETE FROM users WHERE id = ?').run(id)
+  })()
 }
 
 export function ensureSeedCredentials() {
@@ -592,8 +684,9 @@ export function verifyOtpChallenge(email: string, code: string): SessionResult &
       `SELECT u.id, u.email, u.role, u.status, u.institution_id AS institutionId,
               COALESCE(c.must_change_password, 0) AS mustChangePassword
        FROM users u
+       LEFT JOIN institutions i ON i.id = u.institution_id
        LEFT JOIN user_credentials c ON c.user_id = u.id
-       WHERE u.email = ? AND u.status = 'active'`,
+       WHERE u.email = ? AND u.status = 'active' AND (u.role = 'root' OR i.status = 'active')`,
     )
     .get(normalizedEmail) as {
       id: number
@@ -638,7 +731,9 @@ export function verifyMagicLinkChallenge(token: string): SessionResult {
   const userRow = db
     .prepare(
       `SELECT id, email, role, status, institution_id AS institutionId
-       FROM users WHERE email = ? AND status = 'active'`,
+       FROM users u
+       LEFT JOIN institutions i ON i.id = u.institution_id
+       WHERE u.email = ? AND u.status = 'active' AND (u.role = 'root' OR i.status = 'active')`,
     )
     .get(challenge.email) as {
       id: number
