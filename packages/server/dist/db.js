@@ -26,7 +26,13 @@ function openEncryptedDatabase(databasePath) {
     if (isPlaintextSqliteDatabase(databasePath)) {
         throw new Error('Refusing to open plaintext SQLite database at QUICKGLIMPSE_DB_PATH. Restore or migrate it with an audited offline SQLCipher process before startup.');
     }
-    const db = new Database(databasePath);
+    let db;
+    try {
+        db = new Database(databasePath);
+    }
+    catch (error) {
+        throw new Error(`Unable to open encrypted database at ${databasePath}. Confirm QUICKGLIMPSE_DB_PATH points to a writable file path and that its parent directory is writable by the Qglimpse process user.`, { cause: error });
+    }
     applyEncryptionSettings(db);
     db.key(encryptionKey);
     try {
@@ -418,7 +424,13 @@ export function getDb() {
     if (database) {
         return database;
     }
-    mkdirSync(path.dirname(config.databasePath), { recursive: true });
+    const databaseDir = path.dirname(config.databasePath);
+    try {
+        mkdirSync(databaseDir, { recursive: true });
+    }
+    catch (error) {
+        throw new Error(`Unable to create database directory ${databaseDir}. Confirm QUICKGLIMPSE_DB_PATH is under a writable directory for the Qglimpse process user.`, { cause: error });
+    }
     const db = openEncryptedDatabase(config.databasePath);
     db.pragma('journal_mode = WAL');
     runMigrations(db);

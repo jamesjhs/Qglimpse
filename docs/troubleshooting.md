@@ -18,14 +18,17 @@
 
 ### `SQLITE_CANTOPEN` / database directory not found
 
-**Cause:** The directory set in `QUICKGLIMPSE_DATA_DIR` or `QUICKGLIMPSE_DB_PATH` does not exist and could not be created (permission error).
+**Cause:** `QUICKGLIMPSE_DB_PATH` points to a file whose parent directory cannot be created or written by the Qglimpse process user.
 
-**Fix:** Ensure the process user has write access to the data directory:
+**Fix:** Set `QUICKGLIMPSE_DB_PATH` to a writable location, or create and chown the configured directory before starting:
 ```bash
-mkdir -p .data
-chmod 750 .data
+mkdir -p /var/node/qglimpse.jahosi.co.uk-2010/data
+chown -R "$USER":"$USER" /var/node/qglimpse.jahosi.co.uk-2010/data
+chmod 750 /var/node/qglimpse.jahosi.co.uk-2010/data
 npm start
 ```
+
+For hosted environments where `/var/lib` is not writable, use a path inside the deployed app directory, for example `QUICKGLIMPSE_DB_PATH=./data/quickglimpse.db`.
 
 ---
 
