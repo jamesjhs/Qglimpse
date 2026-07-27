@@ -287,7 +287,7 @@ Goal: make Qglimpse's single-question feedback method the core product behaviour
 Work:
 
 - Separate core root-managed templates, institution templates, demographic templates, and live kiosk assignments.
-- Implement single-question mode: exactly one active non-demographic question per guest session.
+- Allow the option of single-question mode: exactly one active non-demographic question per guest session.
 - Implement continuous, manual, user-targeted, and scheduled question selection.
 - Validate question type, options, schedule windows, and institution ownership.
 - Keep demographic questions optional and independently configurable.

@@ -176,6 +176,92 @@ function friendlyDisplayError(message: string) {
   return message
 }
 
+const fallbackTimezones = [
+  'UTC',
+  'Europe/London',
+  'Europe/Dublin',
+  'Europe/Paris',
+  'Europe/Berlin',
+  'America/New_York',
+  'America/Chicago',
+  'America/Denver',
+  'America/Los_Angeles',
+  'America/Toronto',
+  'Asia/Dubai',
+  'Asia/Kolkata',
+  'Asia/Singapore',
+  'Asia/Tokyo',
+  'Australia/Sydney',
+  'Pacific/Auckland',
+]
+
+function getSupportedTimezones() {
+  const supported =
+    typeof Intl.supportedValuesOf === 'function'
+      ? Intl.supportedValuesOf('timeZone')
+      : fallbackTimezones
+  return Array.from(new Set(['UTC', ...supported, ...fallbackTimezones])).sort((a, b) => a.localeCompare(b))
+}
+
+function getTimezoneOffsetLabel(timezone: string) {
+  try {
+    const part = new Intl.DateTimeFormat('en-GB', {
+      timeZone: timezone,
+      timeZoneName: 'shortOffset',
+    })
+      .formatToParts(new Date())
+      .find((item) => item.type === 'timeZoneName')?.value
+    return part ?? ''
+  } catch {
+    return ''
+  }
+}
+
+function getTimezoneOffsetMinutes(timezone: string) {
+  try {
+    const date = new Date()
+    const parts = new Intl.DateTimeFormat('en-GB', {
+      timeZone: timezone,
+      hour12: false,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+    }).formatToParts(date)
+    const values = Object.fromEntries(parts.map((part) => [part.type, part.value]))
+    const asUtc = Date.UTC(
+      Number(values.year),
+      Number(values.month) - 1,
+      Number(values.day),
+      Number(values.hour),
+      Number(values.minute),
+      Number(values.second),
+    )
+    return Math.round((asUtc - date.getTime()) / 60000)
+  } catch {
+    return 0
+  }
+}
+
+function formatTimezoneLabel(timezone: string) {
+  if (timezone === 'UTC') {
+    return 'UTC - Coordinated Universal Time'
+  }
+
+  const [region, ...placeParts] = timezone.split('/')
+  const place = (placeParts.join(' / ') || timezone).replaceAll('_', ' ')
+  const offset = getTimezoneOffsetLabel(timezone)
+  return `${place} (${region.replaceAll('_', ' ')}${offset ? `, ${offset}` : ''})`
+}
+
+const timezoneChoices = getSupportedTimezones().map((value) => ({
+  value,
+  label: formatTimezoneLabel(value),
+  offsetMinutes: getTimezoneOffsetMinutes(value),
+})).sort((a, b) => a.offsetMinutes - b.offsetMinutes || a.label.localeCompare(b.label))
+
 declare global {
   interface Window {
     turnstile?: {
@@ -196,14 +282,14 @@ declare global {
 }
 
 const navClass = ({ isActive }: { isActive: boolean }) =>
-  `whitespace-nowrap rounded-full px-3 py-2 text-sm font-medium transition ${
+  `inline-flex min-h-11 w-full shrink-0 items-center justify-center whitespace-nowrap rounded-full px-4 py-2 text-sm font-medium transition sm:w-auto ${
     isActive
       ? 'bg-[var(--brand-700)] text-white shadow-lg shadow-[color:var(--brand-shadow)]'
       : 'text-slate-600 hover:bg-[var(--brand-100)] hover:text-[var(--brand-900)]'
   }`
 
 const statCardClass =
-  'rounded-3xl border border-[var(--brand-100)] bg-white/95 p-5 shadow-sm shadow-[color:var(--brand-shadow)] ring-1 ring-white/60'
+  'rounded-xl border border-[var(--brand-100)] bg-white/95 p-4 shadow-sm shadow-[color:var(--brand-shadow)] ring-1 ring-white/60 sm:p-5'
 
 const institutionColorSchemes = {
   ocean: {
@@ -373,6 +459,7 @@ function App() {
   const [interestTurnstileToken, setInterestTurnstileToken] = useState('')
   const [interestTurnstileResetSignal, setInterestTurnstileResetSignal] = useState(0)
   const [interestMessage, setInterestMessage] = useState<string | null>(null)
+  const [accountMenuOpen, setAccountMenuOpen] = useState(false)
   const [smtpForm, setSmtpForm] = useState<SmtpFormState>({
     username: '',
     password: '',
@@ -407,6 +494,7 @@ function App() {
   const [crossTabDemo, setCrossTabDemo] = useState('')
   const [crossTabData, setCrossTabData] = useState<Array<{ primaryAnswer: string; demoAnswer: string; count: number | '< 5' }> | null>(null)
   const sessionRestoreChecked = useRef(false)
+  const accountMenuRef = useRef<HTMLDivElement | null>(null)
   const kioskPromptQuestions = useMemo(() => kioskQuestions.filter((q) => !q.isDemographic), [kioskQuestions])
   const kioskDemographicQuestions = useMemo(() => kioskQuestions.filter((q) => q.isDemographic), [kioskQuestions])
   const requiresTurnstileWidget = Boolean(bootstrap?.authCore.turnstileSiteKey && bootstrap.authCore.turnstileRequired)
@@ -491,6 +579,30 @@ function App() {
     return () => clearTimeout(timer)
   }, [kioskState, kioskCountdown])
 
+  useEffect(() => {
+    if (!accountMenuOpen) return
+
+    const closeAccountMenu = (event: MouseEvent | KeyboardEvent) => {
+      if (event instanceof KeyboardEvent) {
+        if (event.key === 'Escape') {
+          setAccountMenuOpen(false)
+        }
+        return
+      }
+
+      if (accountMenuRef.current && !accountMenuRef.current.contains(event.target as Node)) {
+        setAccountMenuOpen(false)
+      }
+    }
+
+    document.addEventListener('mousedown', closeAccountMenu)
+    document.addEventListener('keydown', closeAccountMenu)
+    return () => {
+      document.removeEventListener('mousedown', closeAccountMenu)
+      document.removeEventListener('keydown', closeAccountMenu)
+    }
+  }, [accountMenuOpen])
+
   const selectedInstitution = useMemo(() => {
     if (!bootstrap?.institutions?.length) {
       return null
@@ -510,19 +622,19 @@ function App() {
   )
 
   const renderRequiredPasswordChange = () => (
-    <div className="min-h-screen bg-gradient-to-b from-[var(--brand-50)] via-white to-slate-50 px-4 py-10 text-slate-900 md:px-6" style={appThemeStyle}>
+    <div className="min-h-screen bg-gradient-to-b from-[var(--brand-50)] via-white to-slate-50 px-4 py-6 text-slate-900 md:px-6 md:py-10" style={appThemeStyle}>
       <main className="mx-auto grid min-h-[calc(100vh-5rem)] max-w-5xl items-center">
-        <section className="mx-auto grid w-full max-w-4xl gap-8 lg:grid-cols-[0.9fr_1.1fr] lg:items-center">
+        <section className="mx-auto grid w-full max-w-4xl gap-6 lg:grid-cols-[0.9fr_1.1fr] lg:items-center">
           <div>
-            <p className="text-xs font-semibold uppercase tracking-[0.2em] text-[var(--brand-700)]">Account setup</p>
-            <h1 className="mt-4 text-4xl font-semibold leading-tight tracking-tight text-slate-950 md:text-5xl">
+            <p className="text-xs font-semibold uppercase text-[var(--brand-700)] sm:tracking-[0.2em]">Account setup</p>
+            <h1 className="mt-4 text-3xl font-semibold leading-tight tracking-tight text-slate-950 sm:text-4xl md:text-5xl">
               Set a new password.
             </h1>
             <p className="mt-5 max-w-md text-base leading-7 text-slate-600">
               {sessionUser?.email} needs a password update before the workspace opens.
             </p>
           </div>
-          <article className="rounded-2xl border border-[var(--brand-100)] bg-white p-6 shadow-sm shadow-[color:var(--brand-shadow)]">
+          <article className="rounded-xl border border-[var(--brand-100)] bg-white p-4 shadow-sm shadow-[color:var(--brand-shadow)] sm:p-6">
             <h2 className="text-xl font-semibold text-slate-950">Password change required</h2>
             <p className="mt-2 text-sm leading-6 text-slate-600">
               Choose a new password with at least 10 characters.
@@ -530,7 +642,7 @@ function App() {
             <form className="mt-5 grid gap-3" onSubmit={(event) => void changePassword(event).catch((err: unknown) => setError(err instanceof Error ? err.message : 'Password change failed.'))}>
               <PasswordInput autoComplete="new-password" name="newPassword" placeholder="New password (min 10 chars)" />
               <PasswordInput autoComplete="new-password" name="confirmPassword" placeholder="Verify new password" />
-              <button className="w-fit rounded-full bg-[var(--brand-700)] px-5 py-2.5 text-sm font-semibold text-white shadow-lg shadow-[color:var(--brand-shadow)]" type="submit">
+              <button className="w-full rounded-full bg-[var(--brand-700)] px-5 py-2.5 text-sm font-semibold text-white shadow-lg shadow-[color:var(--brand-shadow)] sm:w-fit" type="submit">
                 Update password
               </button>
             </form>
@@ -690,6 +802,7 @@ function App() {
 
   const logout = async () => {
     const token = authToken
+    setAccountMenuOpen(false)
     clearAuthenticatedSession()
     if (token) {
       await fetch('/api/auth/logout', {
@@ -1316,17 +1429,51 @@ function App() {
       /> : <Navigate to={sessionUser ? '/' : authRedirectPath} replace />} />
       <Route path="*" element={
     <div className="min-h-screen bg-gradient-to-b from-[var(--brand-50)] via-white to-slate-50 text-slate-900" style={appThemeStyle}>
+      {sessionUser && sessionUser.role !== 'institution_kiosk' ? (
+        <div className="fixed right-3 top-3 z-50 sm:right-6 sm:top-5" ref={accountMenuRef}>
+          <button
+            aria-expanded={accountMenuOpen}
+            aria-haspopup="menu"
+            className="flex max-w-[calc(100vw-1.5rem)] items-center gap-2 rounded-full border border-[var(--brand-100)] bg-white/95 px-3 py-2 text-sm font-semibold text-slate-800 shadow-lg shadow-[color:var(--brand-shadow)] backdrop-blur hover:bg-[var(--brand-50)] sm:max-w-sm sm:px-4"
+            onClick={() => setAccountMenuOpen((current) => !current)}
+            type="button"
+          >
+            <span className="max-w-[11rem] truncate sm:max-w-64">{sessionUser.email}</span>
+            <span aria-hidden="true" className="text-xs text-slate-500">{accountMenuOpen ? 'Close' : 'Menu'}</span>
+          </button>
+          {accountMenuOpen ? (
+            <div className="absolute right-0 z-20 mt-2 grid min-w-56 overflow-hidden rounded-xl border border-slate-200 bg-white py-2 text-sm shadow-xl shadow-slate-200/70" role="menu">
+              <NavLink
+                className="px-4 py-2 font-medium text-slate-700 hover:bg-[var(--brand-50)] hover:text-[var(--brand-900)]"
+                onClick={() => setAccountMenuOpen(false)}
+                role="menuitem"
+                to="/profile"
+              >
+                Edit profile
+              </NavLink>
+              <button
+                className="px-4 py-2 text-left font-medium text-red-700 hover:bg-red-50"
+                onClick={() => void logout()}
+                role="menuitem"
+                type="button"
+              >
+                Logout
+              </button>
+            </div>
+          ) : null}
+        </div>
+      ) : null}
       <header className="border-b border-[var(--brand-100)] bg-white/90 backdrop-blur">
-        <div className="mx-auto flex max-w-6xl flex-col gap-4 px-6 py-6 lg:flex-row lg:items-end lg:justify-between">
+        <div className="mx-auto flex max-w-6xl flex-col gap-4 px-4 pb-5 pt-20 sm:px-6 sm:pt-6 lg:flex-row lg:items-end lg:justify-between">
           <div>
-            <p className="text-sm font-semibold uppercase tracking-[0.2em] text-[var(--brand-700)]">Visitor feedback platform</p>
-            <h1 className="mt-2 text-3xl font-semibold tracking-tight md:text-4xl">{bootstrap.app.name}</h1>
-            <p className="mt-3 max-w-3xl text-slate-600">
+            <p className="text-xs font-semibold uppercase text-[var(--brand-700)] sm:text-sm">Visitor feedback platform</p>
+            <h1 className="mt-2 text-2xl font-semibold tracking-tight text-slate-950 sm:text-3xl md:text-4xl">{bootstrap.app.name}</h1>
+            <p className="mt-3 max-w-3xl text-sm leading-6 text-slate-600 sm:text-base">
               Qglimpse helps organizations capture anonymous in-person feedback quickly with logged-in kiosks, secure sign-in, and easy analytics.
             </p>
           </div>
         </div>
-        <div className="mx-auto flex w-full max-w-6xl gap-2 overflow-x-auto px-6 pb-6">
+        <nav aria-label="Primary" className="mx-auto grid w-full max-w-6xl grid-cols-2 gap-2 px-4 pb-4 sm:flex sm:flex-wrap sm:px-6 sm:pb-6">
           {!sessionUser ? (
             <>
               <NavLink className={navClass} to="/">Home</NavLink>
@@ -1338,7 +1485,6 @@ function App() {
               {sessionUser.role === 'institution_kiosk' ? <NavLink className={navClass} to="/kiosk">Kiosk</NavLink> : null}
               {sessionUser.role !== 'institution_kiosk' ? (
                 <>
-                  <NavLink className={navClass} to="/profile">Profile</NavLink>
                   <NavLink className={navClass} to="/institutions">Institutions</NavLink>
                   <NavLink className={navClass} to="/questions">Questions</NavLink>
                   <NavLink className={navClass} to="/analytics">Analytics</NavLink>
@@ -1351,33 +1497,32 @@ function App() {
                   <NavLink className={navClass} to="/smtp">SMTP</NavLink>
                 </>
               ) : null}
-              <button className={navClass({ isActive: false })} onClick={() => void logout()} type="button">Logout</button>
             </>
           )}
-        </div>
+        </nav>
       </header>
 
-      <main className="mx-auto grid max-w-6xl gap-6 px-4 py-8 md:px-6">
-        {error ? <div className="rounded-2xl border border-amber-300 bg-amber-50 px-4 py-3 text-amber-900">{error}</div> : null}
+      <main className="mx-auto grid max-w-6xl gap-5 px-4 py-5 sm:gap-6 sm:py-8 md:px-6">
+        {error ? <div className="rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-amber-900">{error}</div> : null}
         <Routes>
           <Route
             path="/"
             element={
               !sessionUser ? (
                 <div className="grid gap-8">
-                  <section className="grid gap-8 lg:grid-cols-[1.1fr_0.9fr] lg:items-center">
-                    <div className="py-4">
-                      <p className="text-xs font-semibold uppercase tracking-[0.2em] text-[var(--brand-700)]">Visitor feedback for institutions</p>
-                      <h2 className="mt-4 max-w-3xl text-4xl font-semibold leading-tight tracking-tight text-slate-950 md:text-5xl">
+                  <section className="grid gap-6 lg:grid-cols-[1.1fr_0.9fr] lg:items-center">
+                    <div className="py-2 sm:py-4">
+                      <p className="text-xs font-semibold uppercase text-[var(--brand-700)] sm:tracking-[0.2em]">Visitor feedback for institutions</p>
+                      <h2 className="mt-4 max-w-3xl text-3xl font-semibold leading-tight tracking-tight text-slate-950 sm:text-4xl md:text-5xl">
                         Understand your visitors in the moment.
                       </h2>
-                      <p className="mt-5 max-w-2xl text-lg leading-8 text-slate-700">
+                      <p className="mt-4 max-w-2xl text-base leading-7 text-slate-700 sm:mt-5 sm:text-lg sm:leading-8">
                         Qglimpse is a lightweight web app that helps institutions collect one active anonymous feedback answer,
                         understand their audience, and share useful information through logged-in kiosks and single-use QR links.
                       </p>
                       <div className="mt-7 flex flex-wrap items-center gap-3">
                         <NavLink
-                          className="rounded-full bg-[var(--brand-700)] px-6 py-3 text-sm font-semibold text-white shadow-lg shadow-[color:var(--brand-shadow)]"
+                          className="inline-flex min-h-11 w-full items-center justify-center rounded-full bg-[var(--brand-700)] px-6 py-3 text-sm font-semibold text-white shadow-lg shadow-[color:var(--brand-shadow)] sm:w-auto"
                           to="/login"
                         >
                           Sign in
@@ -1385,7 +1530,7 @@ function App() {
                       </div>
                     </div>
                     <form
-                      className="rounded-2xl border border-[var(--brand-100)] bg-white p-5 shadow-sm shadow-[color:var(--brand-shadow)]"
+                      className="rounded-xl border border-[var(--brand-100)] bg-white p-4 shadow-sm shadow-[color:var(--brand-shadow)] sm:p-5"
                       onSubmit={(event) => void submitInstitutionInterest(event).catch((caughtError: unknown) => setError(caughtError instanceof Error ? caughtError.message : 'Interest registration failed.'))}
                     >
                       <h3 className="text-lg font-semibold text-slate-950">Register institutional interest</h3>
@@ -1410,7 +1555,7 @@ function App() {
                           />
                         ) : null}
                         <button
-                          className="w-fit rounded-full bg-slate-900 px-5 py-2.5 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:bg-slate-300"
+                          className="w-full rounded-full bg-slate-900 px-5 py-2.5 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:bg-slate-300 sm:w-fit"
                           disabled={requiresTurnstileWidget && !interestTurnstileToken}
                           type="submit"
                         >
@@ -1499,20 +1644,20 @@ function App() {
               sessionUser ? (
                 <Navigate to={requestedRedirectPath} replace />
               ) : (
-                <section className="mx-auto grid w-full max-w-5xl gap-8 py-4 lg:grid-cols-[0.9fr_1.1fr] lg:items-center lg:py-10">
+                <section className="mx-auto grid w-full max-w-5xl gap-6 py-2 lg:grid-cols-[0.9fr_1.1fr] lg:items-center lg:py-10">
                 <div>
-                  <p className="text-xs font-semibold uppercase tracking-[0.2em] text-[var(--brand-700)]">Account access</p>
-                  <h2 className="mt-4 text-4xl font-semibold leading-tight tracking-tight text-slate-950 md:text-5xl">
+                  <p className="text-xs font-semibold uppercase text-[var(--brand-700)] sm:tracking-[0.2em]">Account access</p>
+                  <h2 className="mt-4 text-3xl font-semibold leading-tight tracking-tight text-slate-950 sm:text-4xl md:text-5xl">
                     Sign in to Qglimpse.
                   </h2>
-                  <p className="mt-5 max-w-md text-base leading-7 text-slate-600">
+                  <p className="mt-4 max-w-md text-base leading-7 text-slate-600 sm:mt-5">
                     Use your institutional account to continue to the right workspace for your role.
                   </p>
                   <NavLink className="mt-7 inline-flex text-sm font-semibold text-[var(--brand-700)] underline underline-offset-4" to="/">
                     Back to home
                   </NavLink>
                 </div>
-                <article className="rounded-2xl border border-[var(--brand-100)] bg-white p-6 shadow-sm shadow-[color:var(--brand-shadow)]">
+                <article className="rounded-xl border border-[var(--brand-100)] bg-white p-4 shadow-sm shadow-[color:var(--brand-shadow)] sm:p-6">
                   <h3 className="text-xl font-semibold text-slate-950">Login</h3>
                   <form className="mt-5 grid gap-3" onSubmit={(event) => void loginAuthUser(event).catch((caughtError: unknown) => setError(caughtError instanceof Error ? caughtError.message : 'Login failed.'))}>
                     <input autoComplete="username" className="rounded-xl border border-slate-300 px-3 py-2" name="email" placeholder="Email address" required type="email" />
@@ -1526,7 +1671,7 @@ function App() {
                       />
                     ) : null}
                     <button
-                      className="w-fit rounded-full bg-[var(--brand-700)] px-5 py-2.5 text-sm font-semibold text-white shadow-lg shadow-[color:var(--brand-shadow)] disabled:cursor-not-allowed disabled:bg-slate-300 disabled:shadow-none"
+                      className="w-full rounded-full bg-[var(--brand-700)] px-5 py-2.5 text-sm font-semibold text-white shadow-lg shadow-[color:var(--brand-shadow)] disabled:cursor-not-allowed disabled:bg-slate-300 disabled:shadow-none sm:w-fit"
                       disabled={requiresTurnstileWidget && !turnstileToken}
                       type="submit"
                     >
@@ -1537,7 +1682,7 @@ function App() {
                     <summary className="cursor-pointer text-sm font-semibold text-slate-700">Forgot password?</summary>
                     <form className="mt-4 grid gap-3" onSubmit={(event) => void requestPasswordReset(event)}>
                       <input className="rounded-xl border border-slate-300 px-3 py-2" name="email" placeholder="Email address" required type="email" />
-                      <button className="w-fit rounded-full bg-slate-900 px-5 py-2.5 text-sm font-semibold text-white" type="submit">
+                      <button className="w-full rounded-full bg-slate-900 px-5 py-2.5 text-sm font-semibold text-white sm:w-fit" type="submit">
                         Request reset
                       </button>
                     </form>
@@ -1549,7 +1694,7 @@ function App() {
                       <div className="mt-4 rounded-xl border border-sky-200 bg-sky-50 px-4 py-4 text-sm">
                         <div className="font-semibold text-sky-900">2FA required</div>
                         <div className="mt-1 text-sky-700">Enter the one-time code sent to {pendingTwoFa.email}.</div>
-                        <form className="mt-3 flex gap-2" onSubmit={(event) => void verify2FA(event).catch((err: unknown) => setError(err instanceof Error ? err.message : '2FA failed.'))}>
+                        <form className="mt-3 grid gap-2 sm:flex" onSubmit={(event) => void verify2FA(event).catch((err: unknown) => setError(err instanceof Error ? err.message : '2FA failed.'))}>
                           <input className="rounded-xl border border-slate-300 px-3 py-2 font-mono" name="code" placeholder="000000" required />
                           <button className="rounded-full bg-sky-700 px-4 py-2 text-sm font-semibold text-white" type="submit">Verify</button>
                         </form>
@@ -1575,18 +1720,18 @@ function App() {
                 {sessionUser?.role === 'root' ? (
                   <article className={statCardClass}>
                     <h2 className="text-xl font-semibold">Manage institutions (administrator-only)</h2>
-                    <form className="mt-4 flex gap-3" onSubmit={(event) => void createInstitution(event).catch((err: unknown) => setError(err instanceof Error ? err.message : 'Failed.'))}>
+                    <form className="mt-4 grid gap-3 sm:flex" onSubmit={(event) => void createInstitution(event).catch((err: unknown) => setError(err instanceof Error ? err.message : 'Failed.'))}>
                       <input className="flex-1 rounded-xl border border-slate-300 px-3 py-2" name="name" placeholder="Institution name" required />
                       <button className="rounded-full bg-slate-900 px-4 py-2 text-sm font-semibold text-white" type="submit">Create</button>
                     </form>
                     <div className="mt-4 grid gap-3 text-sm">
                       {institutionList.map((inst) => (
-                        <div className="flex items-center justify-between rounded-xl border border-slate-200 bg-slate-50 px-4 py-3" key={inst.id}>
-                          <div>
+                        <div className="grid gap-3 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 sm:flex sm:items-center sm:justify-between" key={inst.id}>
+                          <div className="min-w-0">
                             <div className="font-medium text-slate-900">{inst.name}</div>
-                            <div className="text-slate-500">{inst.slug} · {inst.timezone}</div>
+                            <div className="break-words text-slate-500">{inst.slug} · {inst.timezone}</div>
                           </div>
-                          <button className="rounded-full bg-red-100 px-3 py-1 text-xs font-semibold text-red-700 ring-1 ring-red-300" onClick={() => void deleteInstitution(inst.id).catch((err: unknown) => setError(err instanceof Error ? err.message : 'Failed.'))} type="button">Delete</button>
+                          <button className="rounded-full bg-red-100 px-3 py-1 text-xs font-semibold text-red-700 ring-1 ring-red-300 sm:w-auto" onClick={() => void deleteInstitution(inst.id).catch((err: unknown) => setError(err instanceof Error ? err.message : 'Failed.'))} type="button">Delete</button>
                         </div>
                       ))}
                     </div>
@@ -1598,8 +1743,8 @@ function App() {
                       className={statCardClass}
                       key={`${institution.id}:${institution.name}:${institution.slug}:${institution.timezone}:${institution.colorScheme}:${institution.retentionDays}:${institution.kioskIdleResetSeconds}:${institution.kioskCompletionMessage}:${institution.singleQuestionModeEnabled}:${institution.qrModeEnabled}`}
                     >
-                      <div className="flex flex-wrap items-start justify-between gap-4">
-                        <div>
+                      <div className="grid gap-4 sm:flex sm:flex-wrap sm:items-start sm:justify-between">
+                        <div className="min-w-0">
                           <p className="text-xs font-semibold uppercase tracking-[0.2em] text-[var(--brand-700)]">Institution</p>
                           <h2 className="mt-2 text-xl font-semibold">{institution.name}</h2>
                           <p className="mt-2 text-sm text-slate-600">Slug: {institution.slug}</p>
@@ -1610,7 +1755,7 @@ function App() {
                           <p className="mt-1 text-sm text-slate-600">Single question: {institution.singleQuestionModeEnabled ? 'On' : 'Off'} · QR: {institution.qrModeEnabled ? 'On' : 'Off'}</p>
                         </div>
                         <button
-                          className={`rounded-full px-4 py-2 text-sm font-semibold ${institution.kioskModeEnabled ? 'bg-[var(--brand-600)] text-white' : 'bg-slate-200 text-slate-900'}`}
+                          className={`w-full rounded-full px-4 py-2 text-sm font-semibold sm:w-auto ${institution.kioskModeEnabled ? 'bg-[var(--brand-600)] text-white' : 'bg-slate-200 text-slate-900'}`}
                           onClick={() => void toggleKioskMode(institution)}
                           type="button"
                         >
@@ -1630,7 +1775,23 @@ function App() {
                             </label>
                             <label className="grid gap-1 text-sm font-medium">
                               Timezone
-                              <input className="rounded-xl border border-slate-300 px-3 py-2" defaultValue={institution.timezone} name="timezone" required />
+                              <select
+                                className="rounded-xl border border-slate-300 px-3 py-2 disabled:bg-slate-100 disabled:text-slate-500"
+                                defaultValue={institution.timezone}
+                                disabled={sessionUser?.role !== 'root'}
+                                name="timezone"
+                                required
+                              >
+                                {timezoneChoices.map((timezone) => (
+                                  <option key={timezone.value} value={timezone.value}>{timezone.label}</option>
+                                ))}
+                              </select>
+                              {sessionUser?.role !== 'root' ? (
+                                <>
+                                  <input name="timezone" type="hidden" value={institution.timezone} />
+                                  <span className="text-xs text-slate-500">Root users manage timezone changes.</span>
+                                </>
+                              ) : null}
                             </label>
                             <label className="grid gap-1 text-sm font-medium">
                               Theme
@@ -1665,7 +1826,7 @@ function App() {
                               QR mode
                             </label>
                           </div>
-                          <button className="w-fit rounded-full bg-slate-900 px-4 py-2 text-sm font-semibold text-white" type="submit">Save settings</button>
+                          <button className="w-full rounded-full bg-slate-900 px-4 py-2 text-sm font-semibold text-white sm:w-fit" type="submit">Save settings</button>
                         </form>
                       ) : null}
                     </article>
@@ -1711,7 +1872,7 @@ function App() {
                     </div>
                     <div className="mt-4 grid gap-3">
                       {managedUsers.map((user) => (
-                        <form className="grid gap-3 rounded-xl border border-slate-200 bg-slate-50 p-4 lg:grid-cols-[1.5fr_1fr_1fr_1fr_auto_auto]" key={`${user.id}:${user.email}:${user.role}:${user.institutionId ?? 'none'}:${user.status}`} onSubmit={(event) => void updateManagedUser(event, user).catch((err: unknown) => setError(err instanceof Error ? err.message : 'Update failed.'))}>
+                        <form className="grid gap-3 rounded-xl border border-slate-200 bg-slate-50 p-3 sm:p-4 lg:grid-cols-[1.5fr_1fr_1fr_1fr_auto_auto]" key={`${user.id}:${user.email}:${user.role}:${user.institutionId ?? 'none'}:${user.status}`} onSubmit={(event) => void updateManagedUser(event, user).catch((err: unknown) => setError(err instanceof Error ? err.message : 'Update failed.'))}>
                           <input className="rounded-xl border border-slate-300 px-3 py-2" defaultValue={user.email} name="email" type="email" />
                           <select className="rounded-xl border border-slate-300 px-3 py-2" defaultValue={user.role} disabled={user.role === 'root'} name="role">
                             <option value="root">Root</option>
@@ -1821,11 +1982,11 @@ function App() {
             path="/questions"
             element={requireSession(
               <section className="grid gap-6">
-                <div className="flex items-center justify-between">
+                <div className="grid gap-3 sm:flex sm:items-center sm:justify-between">
                   <h2 className="text-xl font-semibold">Institution questions</h2>
                   {selectedInstitution && authToken ? (
                     <button
-                      className="rounded-full bg-[var(--brand-700)] px-4 py-2 text-sm font-semibold text-white"
+                      className="w-full rounded-full bg-[var(--brand-700)] px-4 py-2 text-sm font-semibold text-white sm:w-auto"
                       onClick={() => void loadInstitutionQuestions(selectedInstitution.id, authToken)}
                       type="button"
                     >
@@ -1849,8 +2010,8 @@ function App() {
                     <div className="grid gap-3">
                       {institutionQuestions.map((question) => (
                         <article className={statCardClass} key={question.id}>
-                          <div className="flex flex-wrap items-start justify-between gap-3">
-                            <div className="flex-1">
+                          <div className="grid gap-3 sm:flex sm:flex-wrap sm:items-start sm:justify-between">
+                            <div className="min-w-0 flex-1">
                               <div className="flex flex-wrap items-center gap-2">
                                 <span className="font-semibold text-slate-900">{question.prompt}</span>
                                 <span className="rounded-full bg-sky-100 px-2 py-0.5 text-xs font-semibold uppercase tracking-wide text-sky-800">{question.questionType}</span>
@@ -1869,7 +2030,7 @@ function App() {
                                 </ul>
                               ) : null}
                             </div>
-                            <div className="flex gap-2">
+                            <div className="grid gap-2 sm:flex">
                               <button
                                 className="rounded-full bg-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-700"
                                 onClick={() => void toggleQuestionKiosk(question).catch((err: unknown) => setError(err instanceof Error ? err.message : 'Update failed.'))}
@@ -1916,7 +2077,7 @@ function App() {
                           Options (comma-separated, for single/multiple types)
                           <input className="rounded-xl border border-slate-300 px-3 py-2" name="options" placeholder="Option A, Option B, Option C" />
                         </label>
-                        <div className="flex gap-6 text-sm">
+                        <div className="grid gap-3 text-sm sm:flex sm:gap-6">
                           <label className="flex items-center gap-2 font-medium">
                             <input name="includeInKiosk" type="hidden" value="false" />
                             <input name="includeInKiosk" type="checkbox" value="true" />
@@ -1945,7 +2106,7 @@ function App() {
                             </label>
                           </div>
                         </details>
-                        <button className="w-fit rounded-full bg-slate-900 px-5 py-2.5 text-sm font-semibold text-white" type="submit">Create question</button>
+                        <button className="w-full rounded-full bg-slate-900 px-5 py-2.5 text-sm font-semibold text-white sm:w-fit" type="submit">Create question</button>
                       </form>
                     </article>
                   </>
@@ -2053,9 +2214,9 @@ function App() {
             element={requireSession(
               <section className="grid gap-6">
                 <article className={statCardClass}>
-                  <div className="flex flex-wrap items-end justify-between gap-4">
+                  <div className="grid gap-4 lg:flex lg:flex-wrap lg:items-end lg:justify-between">
                     <h2 className="text-xl font-semibold">Analytics</h2>
-                    <div className="flex flex-wrap items-end gap-3">
+                    <div className="grid gap-3 sm:grid-cols-[1fr_1fr_auto] sm:items-end">
                       <label className="grid gap-1 text-xs font-medium text-slate-600">
                         From
                         <input
@@ -2143,8 +2304,8 @@ function App() {
                             {qData.responses.map((resp) => {
                               const maxR = Math.max(...qData.responses.map((r) => r.count), 1)
                               return (
-                                <div className="mt-2 grid grid-cols-[1fr_3fr_auto] items-center gap-3 text-sm" key={resp.answer}>
-                                  <span className="truncate text-slate-700">{resp.answer}</span>
+                                <div className="mt-2 grid grid-cols-[minmax(5rem,1fr)_minmax(7rem,3fr)_auto] items-center gap-3 text-sm" key={resp.answer}>
+                                  <span className="min-w-0 truncate text-slate-700">{resp.answer}</span>
                                   <div className="h-4 rounded-full bg-slate-100">
                                     <div
                                       className="h-full rounded-full bg-sky-500 transition-all"
@@ -2247,7 +2408,7 @@ function App() {
                     <form className="mt-4 grid gap-3" onSubmit={(event) => void changePassword(event).catch((err: unknown) => setError(err instanceof Error ? err.message : 'Failed.'))}>
                       <PasswordInput autoComplete="current-password" name="currentPassword" placeholder="Current password" />
                       <PasswordInput autoComplete="new-password" name="newPassword" placeholder="New password (min 10 chars)" />
-                      <button className="w-fit rounded-full bg-slate-900 px-5 py-2.5 text-sm font-semibold text-white" type="submit">Update password</button>
+                      <button className="w-full rounded-full bg-slate-900 px-5 py-2.5 text-sm font-semibold text-white sm:w-fit" type="submit">Update password</button>
                     </form>
                   )}
                 </article>
@@ -2255,7 +2416,7 @@ function App() {
                   <h2 className="text-xl font-semibold">Two-factor authentication</h2>
                   <p className="mt-2 text-sm text-slate-600">Enable or disable OTP-based 2FA for your account.</p>
                   {sessionUser ? (
-                    <div className="mt-4 flex gap-3">
+                    <div className="mt-4 grid gap-3 sm:flex">
                       <button className="rounded-full bg-sky-700 px-4 py-2 text-sm font-semibold text-white" onClick={() => void toggle2FA(sessionUser.id, true).catch((err: unknown) => setError(err instanceof Error ? err.message : 'Failed.'))} type="button">Enable 2FA</button>
                       <button className="rounded-full bg-slate-200 px-4 py-2 text-sm font-semibold text-slate-900" onClick={() => void toggle2FA(sessionUser.id, false).catch((err: unknown) => setError(err instanceof Error ? err.message : 'Failed.'))} type="button">Disable 2FA</button>
                     </div>
@@ -2279,7 +2440,7 @@ function App() {
                     <li>Sign in from <code>/login</code> using your institutional account.</li>
                     <li>Enable kiosk mode from the Institutions view if visitor collection is paused.</li>
                     <li>Use Analytics for date-range response summaries and demographic cross-tab views.</li>
-                    <li>Use Profile to update password and 2FA.</li>
+                    <li>Use the account menu at the top-right to update password and 2FA.</li>
                     <li>Root users can manage SMTP settings, retention controls, and institution lifecycle controls.</li>
                   </ul>
                 </article>
@@ -2438,24 +2599,24 @@ function KioskFullScreen(props: KioskFullScreenProps) {
   const currentDemoQ = demoQuestions[kioskDemoIdx] ?? null
 
   return (
-    <div className="flex min-h-screen flex-col items-center justify-center bg-[var(--brand-900)] px-6 text-white" style={institutionColorSchemes[colorScheme].style as CSSProperties}>
+    <div className="flex min-h-screen flex-col items-center justify-center bg-[var(--brand-900)] px-4 py-6 text-white sm:px-6" style={institutionColorSchemes[colorScheme].style as CSSProperties}>
       {kioskLoading ? (
         <div className="flex flex-col items-center gap-4">
               <div className="h-12 w-12 animate-spin rounded-full border-4 border-[var(--brand-500)] border-t-transparent" />
           <p className="text-slate-300">Please wait…</p>
         </div>
       ) : kioskState === 'landing' ? (
-        <div className="flex flex-col items-center gap-8 text-center">
+        <div className="flex w-full max-w-xl flex-col items-center gap-6 text-center sm:gap-8">
           <div>
-              <p className="text-sm font-semibold uppercase tracking-[0.2em] text-[var(--brand-100)]">Patient feedback</p>
-            <h1 className="mt-3 text-4xl font-semibold tracking-tight md:text-5xl">{institution?.name ?? 'Qglimpse'}</h1>
-            <p className="mt-4 max-w-md text-lg text-slate-300">Share your experience with us. Your feedback helps us improve our service.</p>
+            <p className="text-xs font-semibold uppercase text-[var(--brand-100)] sm:text-sm sm:tracking-[0.2em]">Patient feedback</p>
+            <h1 className="mt-3 text-3xl font-semibold tracking-tight sm:text-4xl md:text-5xl">{institution?.name ?? 'Qglimpse'}</h1>
+            <p className="mt-4 max-w-md text-base text-slate-300 sm:text-lg">Share your experience with us. Your feedback helps us improve our service.</p>
           </div>
           {error ? (
             <p className="rounded-xl border border-amber-500 bg-amber-900/40 px-4 py-3 text-amber-200">{error}</p>
           ) : null}
           <button
-            className="rounded-full bg-[var(--brand-600)] px-10 py-4 text-xl font-semibold shadow-2xl shadow-[color:var(--brand-shadow)] transition hover:bg-[var(--brand-500)]"
+            className="w-full rounded-full bg-[var(--brand-600)] px-10 py-4 text-lg font-semibold shadow-2xl shadow-[color:var(--brand-shadow)] transition hover:bg-[var(--brand-500)] sm:w-auto sm:text-xl"
             onClick={onStart}
             type="button"
           >
@@ -2467,15 +2628,15 @@ function KioskFullScreen(props: KioskFullScreenProps) {
           <div className="mb-6 text-center text-sm text-slate-400">
             Question {kioskCurrentIdx + 1} of {promptQuestions.length}
           </div>
-          <div className="rounded-3xl bg-slate-800 px-8 py-8">
-            <h2 className="text-2xl font-semibold leading-snug">{currentQuestion.prompt}</h2>
+          <div className="rounded-xl bg-slate-800 px-4 py-5 sm:px-8 sm:py-8">
+            <h2 className="text-xl font-semibold leading-snug sm:text-2xl">{currentQuestion.prompt}</h2>
             <div className="mt-6">
               {currentQuestion.questionType === 'star' ? (
-                <div className="flex gap-3">
+                <div className="flex justify-between gap-2 sm:justify-start sm:gap-3">
                   {[1, 2, 3, 4, 5].map((star) => (
                     <button
                       key={star}
-                    className={`text-4xl transition ${kioskStarValue >= star ? 'text-amber-400' : 'text-slate-600'}`}
+                    className={`min-h-12 min-w-12 text-4xl transition ${kioskStarValue >= star ? 'text-amber-400' : 'text-slate-600'}`}
                       onClick={() => onStarChange(star)}
                       type="button"
                     >
@@ -2493,10 +2654,10 @@ function KioskFullScreen(props: KioskFullScreenProps) {
                     value={kioskSliderValue}
                     onChange={(event) => onSliderChange(Number(event.target.value))}
                   />
-                  <div className="mt-2 flex justify-between text-sm text-slate-400">
+                  <div className="mt-2 grid grid-cols-[1fr_auto_1fr] gap-2 text-sm text-slate-400">
                     <span>0 — Poor</span>
                     <span className="text-2xl font-semibold text-white">{kioskSliderValue}</span>
-                    <span>10 — Excellent</span>
+                    <span className="text-right">10 — Excellent</span>
                   </div>
                 </div>
               ) : currentQuestion.questionType === 'boolean' ? (
@@ -2550,7 +2711,7 @@ function KioskFullScreen(props: KioskFullScreenProps) {
             </div>
             <div className="mt-6 flex justify-end">
               <button
-                className="rounded-full bg-[var(--brand-600)] px-8 py-3 font-semibold transition hover:bg-[var(--brand-500)]"
+                className="w-full rounded-full bg-[var(--brand-600)] px-8 py-3 font-semibold transition hover:bg-[var(--brand-500)] sm:w-auto"
                 onClick={onSubmitAnswer}
                 type="button"
               >
@@ -2564,8 +2725,8 @@ function KioskFullScreen(props: KioskFullScreenProps) {
           <div className="mb-6 text-center text-sm text-slate-400">
             About you — {kioskDemoIdx + 1} of {demoQuestions.length}
           </div>
-          <div className="rounded-3xl bg-slate-800 px-8 py-8">
-            <h2 className="text-2xl font-semibold leading-snug">{currentDemoQ.prompt}</h2>
+          <div className="rounded-xl bg-slate-800 px-4 py-5 sm:px-8 sm:py-8">
+            <h2 className="text-xl font-semibold leading-snug sm:text-2xl">{currentDemoQ.prompt}</h2>
             <div className="mt-6">
               {currentDemoQ.questionType === 'single' || currentDemoQ.options.length > 0 ? (
                 <div className="flex flex-col gap-3">

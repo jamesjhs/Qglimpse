@@ -83,6 +83,15 @@ const challengeVerifySchema = z.object({
 const profileEmailSchema = z.object({
     email: z.string().email(),
 });
+function isValidTimezone(timezone) {
+    try {
+        new Intl.DateTimeFormat('en-GB', { timeZone: timezone }).format(new Date());
+        return true;
+    }
+    catch {
+        return false;
+    }
+}
 const institutionSchema = z.object({
     name: z.string().trim().min(1),
     slug: z
@@ -91,7 +100,7 @@ const institutionSchema = z.object({
         .min(1)
         .regex(/^[a-z0-9-]+$/, 'Slug must contain only lowercase letters, numbers, and hyphens')
         .optional(),
-    timezone: z.string().trim().min(1).default('UTC'),
+    timezone: z.string().trim().min(1).refine(isValidTimezone, 'Choose a valid timezone.').default('UTC'),
     colorScheme: z.enum(['ocean', 'emerald', 'sunset', 'violet']).default('ocean'),
     singleQuestionModeEnabled: z.boolean().default(false),
     qrModeEnabled: z.boolean().default(false),
@@ -99,6 +108,16 @@ const institutionSchema = z.object({
     kioskIdleResetSeconds: z.coerce.number().int().min(5).max(300).default(10),
     kioskCompletionMessage: z.string().trim().min(1).max(240).default('Your feedback has been recorded.'),
 });
+function formatInstitutionValidationError(error) {
+    const issue = error.issues[0];
+    if (issue?.path[0] === 'timezone') {
+        return 'Choose a valid timezone from the list.';
+    }
+    if (issue?.path[0] === 'slug') {
+        return 'Use a slug with only lowercase letters, numbers, and hyphens.';
+    }
+    return 'Please check the institution details and try again.';
+}
 const institutionStatusSchema = z.object({
     status: z.enum(userStatuses),
 });
@@ -909,7 +928,7 @@ export function createApp() {
         }
         const parsed = institutionSchema.safeParse(req.body);
         if (!parsed.success) {
-            return res.status(400).json({ error: 'Invalid institution payload.' });
+            return res.status(400).json({ error: formatInstitutionValidationError(parsed.error) });
         }
         try {
             const slug = parsed.data.slug ?? parsed.data.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
@@ -953,9 +972,18 @@ export function createApp() {
         }
         const parsed = institutionSchema.safeParse(req.body);
         if (!parsed.success) {
-            return res.status(400).json({ error: 'Invalid institution payload.' });
+            return res.status(400).json({ error: formatInstitutionValidationError(parsed.error) });
         }
         try {
+            if (auth.session.user.role !== 'root') {
+                const existing = getInstitution(institutionId);
+                if (!existing) {
+                    return res.status(404).json({ error: 'Institution not found.' });
+                }
+                if (existing.timezone !== parsed.data.timezone) {
+                    return res.status(403).json({ error: 'Root access required to change timezone.' });
+                }
+            }
             const slug = parsed.data.slug ?? parsed.data.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
             const institution = updateInstitution(institutionId, { ...parsed.data, slug });
             recordAuditEvent({ action: 'institution_updated', actor: auth.session.user, institutionId });

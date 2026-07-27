@@ -231,7 +231,7 @@ test('institution admin can inspect and update only own institution settings', a
     body: JSON.stringify({
       name: 'Westside Clinic',
       slug: 'westside-clinic',
-      timezone: 'Europe/London',
+      timezone: 'America/Los_Angeles',
       colorScheme: 'emerald',
       singleQuestionModeEnabled: true,
       qrModeEnabled: true,
@@ -241,11 +241,32 @@ test('institution admin can inspect and update only own institution settings', a
     }),
   })
   assert.equal(updated.response.status, 200)
-  assert.equal(updated.body.timezone, 'Europe/London')
+  assert.equal(updated.body.timezone, 'America/Los_Angeles')
   assert.equal(updated.body.singleQuestionModeEnabled, 1)
   assert.equal(updated.body.qrModeEnabled, 1)
   assert.equal(updated.body.retentionDays, 45)
   assert.equal(updated.body.kioskIdleResetSeconds, 30)
+
+  const forbiddenTimezoneChange = await api(`/api/institutions/${secondInstitutionId}`, {
+    method: 'PUT',
+    headers: {
+      Authorization: `Bearer ${westAdminToken}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      name: 'Westside Clinic',
+      slug: 'westside-clinic',
+      timezone: 'Europe/London',
+      colorScheme: 'emerald',
+      singleQuestionModeEnabled: true,
+      qrModeEnabled: true,
+      retentionDays: 45,
+      kioskIdleResetSeconds: 30,
+      kioskCompletionMessage: 'Thanks for visiting.',
+    }),
+  })
+  assert.equal(forbiddenTimezoneChange.response.status, 403)
+  assert.equal(forbiddenTimezoneChange.body.error, 'Root access required to change timezone.')
 
   const forbiddenUpdate = await api('/api/institutions/1', {
     method: 'PUT',
@@ -256,6 +277,72 @@ test('institution admin can inspect and update only own institution settings', a
     body: JSON.stringify({ name: 'Downtown Clinic', slug: 'downtown-clinic', timezone: 'UTC' }),
   })
   assert.equal(forbiddenUpdate.response.status, 403)
+})
+
+test('root can update institution timezone using a valid IANA timezone', async () => {
+  const rootToken = await login('root@quickglimpse.local', 'ChangeMeRoot123!')
+
+  const institution = await api('/api/institutions', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${rootToken}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      name: 'Timezone Managed Pilot',
+      slug: 'timezone-managed-pilot',
+      timezone: 'UTC',
+    }),
+  })
+  assert.equal(institution.response.status, 201)
+
+  const invalid = await api(`/api/institutions/${institution.body.id}`, {
+    method: 'PUT',
+    headers: {
+      Authorization: `Bearer ${rootToken}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      name: 'Timezone Managed Pilot',
+      slug: 'timezone-managed-pilot',
+      timezone: 'Not/A_Timezone',
+      colorScheme: 'ocean',
+      singleQuestionModeEnabled: false,
+      qrModeEnabled: false,
+      retentionDays: 90,
+      kioskIdleResetSeconds: 10,
+      kioskCompletionMessage: 'Your feedback has been recorded.',
+    }),
+  })
+  assert.equal(invalid.response.status, 400)
+  assert.equal(invalid.body.error, 'Choose a valid timezone from the list.')
+
+  const updated = await api(`/api/institutions/${institution.body.id}`, {
+    method: 'PUT',
+    headers: {
+      Authorization: `Bearer ${rootToken}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      name: 'Timezone Managed Pilot',
+      slug: 'timezone-managed-pilot',
+      timezone: 'Europe/London',
+      colorScheme: 'ocean',
+      singleQuestionModeEnabled: false,
+      qrModeEnabled: false,
+      retentionDays: 90,
+      kioskIdleResetSeconds: 10,
+      kioskCompletionMessage: 'Your feedback has been recorded.',
+    }),
+  })
+  assert.equal(updated.response.status, 200)
+  assert.equal(updated.body.timezone, 'Europe/London')
+
+  const deleted = await api(`/api/institutions/${institution.body.id}`, {
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${rootToken}` },
+  })
+  assert.equal(deleted.response.status, 204)
 })
 
 test('institution user can manage own question bank only', async () => {
