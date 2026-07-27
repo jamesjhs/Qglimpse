@@ -46,6 +46,16 @@ test.after(() => {
   server.close()
 })
 
+function listSourceFiles(directory) {
+  return fs.readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
+    const fullPath = path.join(directory, entry.name)
+    if (entry.isDirectory()) {
+      return listSourceFiles(fullPath)
+    }
+    return entry.isFile() && fullPath.endsWith('.ts') ? [fullPath] : []
+  })
+}
+
 async function api(pathname, options = {}) {
   const response = await fetch(`${baseUrl}${pathname}`, options)
   let body = {}
@@ -89,6 +99,24 @@ test('security headers and request IDs are sent on health and API responses', as
   assert.equal(apiResponse.response.headers.get('cache-control'), 'no-store')
   assert.equal(apiResponse.response.headers.get('x-robots-tag'), 'noindex')
   assert.match(apiResponse.response.headers.get('x-request-id') ?? '', /^[0-9a-f-]{36}$/)
+})
+
+test('application source opens sqlite only through the encrypted db gateway', () => {
+  const sourceRoot = path.resolve(process.cwd(), 'src')
+  const offenders = []
+
+  for (const file of listSourceFiles(sourceRoot)) {
+    const relativePath = path.relative(sourceRoot, file).replaceAll(path.sep, '/')
+    const source = fs.readFileSync(file, 'utf8')
+    if (relativePath === 'db.ts') {
+      continue
+    }
+    if (/better-sqlite3|new\s+Database\s*\(/.test(source)) {
+      offenders.push(relativePath)
+    }
+  }
+
+  assert.deepEqual(offenders, [])
 })
 
 test('structured logging redacts secrets without hiding status codes', () => {
@@ -215,25 +243,47 @@ test('kiosk answer writes are idempotent per session and question', async () => 
     .prepare('SELECT id FROM kiosk_sessions WHERE session_token = ?')
     .get(sessionToken)
   assert.ok(session?.id)
+  const assignedQuestion = db
+    .prepare(
+      `SELECT question_key AS questionKey, question_type AS questionType, options_json AS optionsJson
+       FROM kiosk_session_questions
+       WHERE kiosk_session_id = ?
+       ORDER BY is_demographic, display_order, id
+       LIMIT 1`,
+    )
+    .get(session.id)
+  assert.ok(assignedQuestion?.questionKey)
+  const validAnswer =
+    assignedQuestion.questionType === 'single'
+      ? JSON.parse(assignedQuestion.optionsJson)[0]
+      : assignedQuestion.questionType === 'multiple'
+        ? [JSON.parse(assignedQuestion.optionsJson)[0]]
+        : assignedQuestion.questionType === 'boolean'
+          ? true
+          : assignedQuestion.questionType === 'scale'
+            ? 5
+            : assignedQuestion.questionType === 'star'
+              ? 3
+              : 'Updated feedback'
 
   const first = await api('/api/kiosk/answer', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ sessionToken, questionKey: 'dup-check', answer: { value: 'first' } }),
+    body: JSON.stringify({ sessionToken, questionKey: assignedQuestion.questionKey, answer: validAnswer }),
   })
   const second = await api('/api/kiosk/answer', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ sessionToken, questionKey: 'dup-check', answer: { value: 'second' } }),
+    body: JSON.stringify({ sessionToken, questionKey: assignedQuestion.questionKey, answer: validAnswer }),
   })
   assert.equal(first.response.status, 200)
   assert.equal(second.response.status, 200)
 
   const rows = db
     .prepare('SELECT answer_json AS answerJson FROM responses WHERE kiosk_session_id = ? AND question_key = ?')
-    .all(session.id, 'dup-check')
+    .all(session.id, assignedQuestion.questionKey)
   assert.equal(rows.length, 1)
-  assert.equal(rows[0].answerJson, JSON.stringify({ value: 'second' }))
+  assert.equal(rows[0].answerJson, JSON.stringify(validAnswer))
 })
 
 test('creating a challenge invalidates prior active challenge of same method', async () => {

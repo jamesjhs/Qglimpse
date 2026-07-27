@@ -40,10 +40,17 @@ function openWithKey(key) {
   return db
 }
 
-test('database startup applies encryption key and converts existing plaintext storage', () => {
+test('database startup refuses plaintext storage before encrypted open', () => {
+  assert.throws(() => getDb(), /Refusing to open plaintext SQLite database/)
+  const fileHeader = fs.readFileSync(databasePath).subarray(0, 16).toString('utf8')
+  assert.equal(fileHeader, 'SQLite format 3\0')
+  fs.rmSync(databasePath)
+})
+
+test('database startup applies encryption key for all application queries', () => {
   const db = getDb()
-  const marker = db.prepare('SELECT value FROM plaintext_marker').get()
-  assert.equal(marker.value, 'preserved')
+  const institutionFromAppDb = db.prepare('SELECT slug FROM institutions ORDER BY id LIMIT 1').get()
+  assert.equal(institutionFromAppDb.slug, 'downtown-clinic')
   db.close()
 
   const fileHeader = fs.readFileSync(databasePath).subarray(0, 16).toString('utf8')
@@ -72,7 +79,7 @@ test('database startup applies encryption key and converts existing plaintext st
     const institution = keyed.prepare('SELECT slug FROM institutions ORDER BY id LIMIT 1').get()
     assert.equal(institution.slug, 'downtown-clinic')
     const migration = keyed.prepare('SELECT version FROM schema_migrations ORDER BY version DESC LIMIT 1').get()
-    assert.equal(migration.version, 3)
+    assert.equal(migration.version, 4)
   } finally {
     keyed.close()
   }

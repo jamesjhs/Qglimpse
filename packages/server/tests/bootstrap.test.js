@@ -128,3 +128,97 @@ test('kiosk scheduling respects institution timezone', () => {
   const active = services.getActiveKioskQuestions(institution.id)
   assert.equal(active.some((q) => q.id === target.id), true)
 })
+
+test('single-question mode assigns one feedback question with optional demographics', () => {
+  const db = getDb()
+  const institution = services.createInstitution({
+    name: 'Single Question Pilot',
+    slug: 'single-question-pilot',
+    timezone: 'UTC',
+    singleQuestionModeEnabled: true,
+  })
+  services.toggleInstitutionKioskMode(institution.id, true)
+
+  const first = services.createCustomQuestion(institution.id, {
+    questionType: 'single',
+    prompt: 'How was check-in?',
+    options: ['Poor', 'Good'],
+    includeInKiosk: true,
+    isDemographic: false,
+    displayOrder: 1,
+  })
+  const second = services.createCustomQuestion(institution.id, {
+    questionType: 'star',
+    prompt: 'Rate the waiting area.',
+    options: [],
+    includeInKiosk: true,
+    isDemographic: false,
+    displayOrder: 2,
+  })
+  const demo = services.createCustomQuestion(institution.id, {
+    questionType: 'single',
+    prompt: 'Which visit type best applies?',
+    options: ['New', 'Returning'],
+    includeInKiosk: true,
+    isDemographic: true,
+    displayOrder: 3,
+  })
+  assert.ok(first)
+  assert.ok(second)
+  assert.ok(demo)
+
+  const session = services.startKioskSession(institution.id)
+  const promptQuestions = session.questions.filter((q) => !q.isDemographic)
+  const demographicQuestions = session.questions.filter((q) => q.isDemographic)
+  assert.equal(promptQuestions.length, 1)
+  assert.equal(promptQuestions[0].id, first.id)
+  assert.equal(demographicQuestions.length, 1)
+
+  assert.throws(
+    () => services.submitKioskAnswer(session.sessionToken, second.templateKey, JSON.stringify(3)),
+    /Question is not assigned/,
+  )
+
+  db.prepare('UPDATE institution_questions SET prompt = ?, question_version = question_version + 1 WHERE id = ?').run(
+    'This changed after the session started.',
+    first.id,
+  )
+
+  services.submitKioskAnswer(session.sessionToken, first.templateKey, JSON.stringify('Good'))
+  services.submitKioskAnswer(session.sessionToken, demo.templateKey, JSON.stringify('New'))
+  services.completeKioskSession(session.sessionToken, {})
+
+  const stored = db
+    .prepare('SELECT question_prompt AS questionPrompt, question_version AS questionVersion FROM responses WHERE question_key = ?')
+    .get(first.templateKey)
+  assert.equal(stored.questionPrompt, 'How was check-in?')
+  assert.equal(stored.questionVersion, 1)
+})
+
+test('kiosk answer validation enforces question type and options', () => {
+  const institution = services.createInstitution({
+    name: 'Validation Pilot',
+    slug: 'validation-pilot',
+    timezone: 'UTC',
+  })
+  services.toggleInstitutionKioskMode(institution.id, true)
+
+  const question = services.createCustomQuestion(institution.id, {
+    questionType: 'single',
+    prompt: 'Choose a valid option.',
+    options: ['One', 'Two'],
+    includeInKiosk: true,
+    isDemographic: false,
+    displayOrder: 1,
+  })
+  assert.ok(question)
+
+  const session = services.startKioskSession(institution.id)
+  assert.throws(
+    () => services.submitKioskAnswer(session.sessionToken, question.templateKey, JSON.stringify('Three')),
+    /Answer is not valid/,
+  )
+  assert.deepEqual(services.submitKioskAnswer(session.sessionToken, question.templateKey, JSON.stringify('One')), {
+    recorded: true,
+  })
+})

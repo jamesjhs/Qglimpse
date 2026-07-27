@@ -437,6 +437,9 @@ FodyWeavers.xsd
 *.msm
 *.msp
 /.data
+/data/*.db
+/data/*.db-shm
+/data/*.db-wal
 /packages
 packages/server/dist/db.js
 packages/server/dist/index.js

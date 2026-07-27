@@ -65,7 +65,25 @@ test('production database startup records schema version and does not seed live 
 
   assert.equal(result.status, 0, result.stderr)
   const output = JSON.parse(result.stdout.trim())
-  assert.deepEqual(output, { users: 0, version: 3 })
+  assert.deepEqual(output, { users: 0, version: 4 })
+})
+
+test('production database startup refuses plaintext sqlite files', () => {
+  const env = productionEnv()
+  const result = runInline(
+    `
+      const Database = (await import('better-sqlite3-multiple-ciphers')).default
+      const plaintext = new Database(process.env.QUICKGLIMPSE_DB_PATH)
+      plaintext.exec('CREATE TABLE plaintext_marker (value TEXT NOT NULL)')
+      plaintext.close()
+      const { getDb } = await import('./dist/db.js')
+      getDb()
+    `,
+    env,
+  )
+
+  assert.notEqual(result.status, 0)
+  assert.match(`${result.stderr}${result.stdout}`, /Refusing to open plaintext SQLite database/)
 })
 
 test('production database startup migrates legacy auth session idle timestamps', () => {
@@ -74,6 +92,9 @@ test('production database startup migrates legacy auth session idle timestamps',
     `
       const Database = (await import('better-sqlite3-multiple-ciphers')).default
       const legacyDb = new Database(process.env.QUICKGLIMPSE_DB_PATH)
+      legacyDb.pragma("cipher = 'sqlcipher'")
+      legacyDb.pragma('legacy = 4')
+      legacyDb.key(Buffer.from(process.env.QUICKGLIMPSE_DB_ENCRYPTION_KEY, 'utf8'))
       legacyDb.exec(\`
         CREATE TABLE auth_sessions (
           id INTEGER PRIMARY KEY AUTOINCREMENT,

@@ -22,6 +22,35 @@ export type SmtpSettingsInput = {
 }
 
 const parseOptions = (value: string) => JSON.parse(value) as string[]
+type QuestionType = 'single' | 'multiple' | 'text' | 'scale' | 'boolean' | 'star'
+
+type InstitutionQuestion = {
+  id: number
+  institutionId: number
+  templateKey: string | null
+  questionType: QuestionType
+  prompt: string
+  options: string[]
+  isActive: boolean
+  includeInKiosk: boolean
+  isDemographic: boolean
+  displayOrder: number
+  scheduleDays: number[]
+  scheduleStartTime: string | null
+  scheduleEndTime: string | null
+  questionVersion: number
+  createdAt: string
+}
+
+type KioskAssignedQuestion = {
+  id: number
+  questionKey: string
+  questionVersion: number
+  questionType: QuestionType
+  prompt: string
+  options: string[]
+  isDemographic: boolean
+}
 const institutionSelectColumns = `
   id, name, slug, timezone, status,
   kiosk_mode_enabled AS kioskModeEnabled,
@@ -553,14 +582,15 @@ export function getInstitutionQuestions(institutionId: number) {
               is_active AS isActive, include_in_kiosk AS includeInKiosk,
               is_demographic AS isDemographic, display_order AS displayOrder,
               schedule_days AS scheduleDays, schedule_start_time AS scheduleStartTime,
-              schedule_end_time AS scheduleEndTime, created_at AS createdAt
+              schedule_end_time AS scheduleEndTime, question_version AS questionVersion,
+              created_at AS createdAt
        FROM institution_questions WHERE institution_id = ? ORDER BY display_order, id`,
     )
     .all(institutionId) as Array<{
       id: number
       institutionId: number
       templateKey: string | null
-      questionType: string
+      questionType: QuestionType
       prompt: string
       optionsJson: string
       isActive: number
@@ -570,6 +600,7 @@ export function getInstitutionQuestions(institutionId: number) {
       scheduleDays: string
       scheduleStartTime: string | null
       scheduleEndTime: string | null
+      questionVersion: number
       createdAt: string
     }>
   return rows.map((row) => ({
@@ -586,8 +617,9 @@ export function getInstitutionQuestions(institutionId: number) {
     scheduleDays: JSON.parse(row.scheduleDays) as number[],
     scheduleStartTime: row.scheduleStartTime,
     scheduleEndTime: row.scheduleEndTime,
+    questionVersion: row.questionVersion,
     createdAt: row.createdAt,
-  }))
+  })) satisfies InstitutionQuestion[]
 }
 
 export type UpdateQuestionInput = {
@@ -599,14 +631,66 @@ export type UpdateQuestionInput = {
   scheduleEndTime?: string | null
 }
 
+function questionKey(question: { id: number; templateKey: string | null }) {
+  return question.templateKey ?? `iq-${question.id}`
+}
+
+function normalizeScheduleDays(days: number[] | undefined) {
+  if (!days) return undefined
+  return Array.from(new Set(days)).sort((a, b) => a - b)
+}
+
+function assertValidQuestionConfiguration(input: {
+  questionType: QuestionType
+  prompt: string
+  options: string[]
+  scheduleDays?: number[]
+  scheduleStartTime?: string | null
+  scheduleEndTime?: string | null
+}) {
+  if (input.prompt.trim().length === 0) {
+    throw new Error('Question prompt is required.')
+  }
+  if (input.prompt.length > 500) {
+    throw new Error('Question prompt must be 500 characters or fewer.')
+  }
+  if ((input.questionType === 'single' || input.questionType === 'multiple') && input.options.length < 2) {
+    throw new Error('Single and multiple choice questions require at least two options.')
+  }
+  if (!['single', 'multiple'].includes(input.questionType) && input.options.length > 0) {
+    throw new Error('Options are only allowed for single and multiple choice questions.')
+  }
+  if (input.options.some((option) => option.trim().length === 0 || option.length > 120)) {
+    throw new Error('Question options must be non-empty and 120 characters or fewer.')
+  }
+  if ((input.scheduleStartTime && !input.scheduleEndTime) || (!input.scheduleStartTime && input.scheduleEndTime)) {
+    throw new Error('Scheduled question windows require both a start and end time.')
+  }
+}
+
 export function updateInstitutionQuestion(institutionId: number, questionId: number, input: UpdateQuestionInput) {
   const db = getDb()
   const question = db
-    .prepare('SELECT id FROM institution_questions WHERE id = ? AND institution_id = ?')
-    .get(questionId, institutionId) as { id: number } | undefined
+    .prepare(
+      `SELECT id, question_type AS questionType, prompt, options_json AS optionsJson
+       FROM institution_questions WHERE id = ? AND institution_id = ?`,
+    )
+    .get(questionId, institutionId) as
+    | { id: number; questionType: QuestionType; prompt: string; optionsJson: string }
+    | undefined
   if (!question) {
     throw new Error('Question not found.')
   }
+
+  const normalizedScheduleDays = normalizeScheduleDays(input.scheduleDays)
+  assertValidQuestionConfiguration({
+    questionType: question.questionType,
+    prompt: question.prompt,
+    options: parseOptions(question.optionsJson),
+    scheduleDays: normalizedScheduleDays,
+    scheduleStartTime: input.scheduleStartTime,
+    scheduleEndTime: input.scheduleEndTime,
+  })
 
   const updates: string[] = []
   const params: Record<string, unknown> = { id: questionId }
@@ -625,7 +709,7 @@ export function updateInstitutionQuestion(institutionId: number, questionId: num
   }
   if (input.scheduleDays !== undefined) {
     updates.push('schedule_days = @scheduleDays')
-    params.scheduleDays = JSON.stringify(input.scheduleDays)
+    params.scheduleDays = JSON.stringify(normalizedScheduleDays)
   }
   if ('scheduleStartTime' in input) {
     updates.push('schedule_start_time = @scheduleStartTime')
@@ -637,6 +721,7 @@ export function updateInstitutionQuestion(institutionId: number, questionId: num
   }
 
   if (updates.length > 0) {
+    updates.push('updated_at = CURRENT_TIMESTAMP')
     db.prepare(`UPDATE institution_questions SET ${updates.join(', ')} WHERE id = @id`).run(params)
   }
 
@@ -644,7 +729,7 @@ export function updateInstitutionQuestion(institutionId: number, questionId: num
 }
 
 export type CreateQuestionInput = {
-  questionType: 'single' | 'multiple' | 'text' | 'scale' | 'boolean' | 'star'
+  questionType: QuestionType
   prompt: string
   options: string[]
   includeInKiosk: boolean
@@ -661,6 +746,14 @@ export function createCustomQuestion(institutionId: number, input: CreateQuestio
   if (!institution) {
     throw new Error('Institution not found.')
   }
+  const options = input.options.map((option) => option.trim()).filter(Boolean)
+  const scheduleDays = normalizeScheduleDays(input.scheduleDays) ?? []
+  assertValidQuestionConfiguration({
+    ...input,
+    prompt: input.prompt.trim(),
+    options,
+    scheduleDays,
+  })
   const templateKey = `custom-${randomBytes(8).toString('hex')}`
   const result = db
     .prepare(
@@ -673,12 +766,12 @@ export function createCustomQuestion(institutionId: number, input: CreateQuestio
       institutionId,
       templateKey,
       input.questionType,
-      input.prompt,
-      JSON.stringify(input.options),
+      input.prompt.trim(),
+      JSON.stringify(options),
       input.includeInKiosk ? 1 : 0,
       input.isDemographic ? 1 : 0,
       input.displayOrder,
-      JSON.stringify(input.scheduleDays ?? []),
+      JSON.stringify(scheduleDays),
       input.scheduleStartTime ?? null,
       input.scheduleEndTime ?? null,
     )
@@ -763,14 +856,26 @@ function isWithinTimeWindow(currentMinutes: number, startTime: string | null, en
 
 export function getActiveKioskQuestions(institutionId: number) {
   const { day: currentDay, minutes: currentMinutes } = getInstitutionLocalTime(institutionId)
+  const db = getDb()
+  const institution = db
+    .prepare('SELECT single_question_mode_enabled AS singleQuestionModeEnabled FROM institutions WHERE id = ?')
+    .get(institutionId) as { singleQuestionModeEnabled: number } | undefined
 
   const questions = getInstitutionQuestions(institutionId)
-  return questions.filter((q) => {
+  const scheduledQuestions = questions.filter((q) => {
     if (!q.isActive) return false
     if (!q.includeInKiosk) return false
     if (q.scheduleDays.length > 0 && !q.scheduleDays.includes(currentDay)) return false
     return isWithinTimeWindow(currentMinutes, q.scheduleStartTime, q.scheduleEndTime)
   })
+
+  if (!institution?.singleQuestionModeEnabled) {
+    return scheduledQuestions
+  }
+
+  const promptQuestions = scheduledQuestions.filter((q) => !q.isDemographic)
+  const demographicQuestions = scheduledQuestions.filter((q) => q.isDemographic)
+  return [...promptQuestions.slice(0, 1), ...demographicQuestions]
 }
 
 export function getKioskStatus(institutionSlug: string) {
@@ -811,8 +916,14 @@ export function getKioskStatus(institutionSlug: string) {
 export function startKioskSession(institutionId: number) {
   const db = getDb()
   const institution = db
-    .prepare('SELECT id, status, kiosk_mode_enabled AS kioskModeEnabled FROM institutions WHERE id = ?')
-    .get(institutionId) as { id: number; status: UserStatus; kioskModeEnabled: number } | undefined
+    .prepare(
+      `SELECT id, status, kiosk_mode_enabled AS kioskModeEnabled,
+              single_question_mode_enabled AS singleQuestionModeEnabled
+       FROM institutions WHERE id = ?`,
+    )
+    .get(institutionId) as
+    | { id: number; status: UserStatus; kioskModeEnabled: number; singleQuestionModeEnabled: number }
+    | undefined
   if (!institution) {
     throw new Error('Institution not found.')
   }
@@ -822,15 +933,86 @@ export function startKioskSession(institutionId: number) {
   if (!institution.kioskModeEnabled) {
     throw new Error('Kiosk mode is not enabled for this institution.')
   }
-  const sessionToken = randomBytes(32).toString('base64url')
-  db.prepare(
-    `INSERT INTO kiosk_sessions (institution_id, session_token) VALUES (?, ?)`,
-  ).run(institutionId, sessionToken)
   const questions = getActiveKioskQuestions(institutionId)
+  const promptQuestionCount = questions.filter((q) => !q.isDemographic).length
+  if (promptQuestionCount === 0) {
+    throw new Error('No active feedback question is configured for this kiosk.')
+  }
+  if (institution.singleQuestionModeEnabled && promptQuestionCount !== 1) {
+    throw new Error('Single-question mode requires exactly one active feedback question.')
+  }
+
+  const sessionToken = randomBytes(32).toString('base64url')
+  db.transaction(() => {
+    const sessionResult = db.prepare(`INSERT INTO kiosk_sessions (institution_id, session_token) VALUES (?, ?)`).run(
+      institutionId,
+      sessionToken,
+    )
+    const kioskSessionId = Number(sessionResult.lastInsertRowid)
+    const insertQuestion = db.prepare(
+      `INSERT INTO kiosk_session_questions
+         (kiosk_session_id, institution_question_id, question_key, question_version,
+          question_type, prompt, options_json, is_demographic, display_order)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    )
+    for (const question of questions) {
+      insertQuestion.run(
+        kioskSessionId,
+        question.id,
+        questionKey(question),
+        question.questionVersion,
+        question.questionType,
+        question.prompt,
+        JSON.stringify(question.options),
+        question.isDemographic ? 1 : 0,
+        question.displayOrder,
+      )
+    }
+  })()
   return { sessionToken, institutionId, questions }
 }
 
-export function submitKioskAnswer(sessionToken: string, questionKey: string, answerJson: string) {
+function assertAnswerMatchesQuestion(question: KioskAssignedQuestion, answer: unknown) {
+  if (question.questionType === 'single') {
+    if (typeof answer !== 'string' || !question.options.includes(answer)) {
+      throw new Error('Answer is not valid for this question.')
+    }
+    return
+  }
+  if (question.questionType === 'multiple') {
+    if (
+      !Array.isArray(answer) ||
+      answer.length === 0 ||
+      answer.some((item) => typeof item !== 'string' || !question.options.includes(item))
+    ) {
+      throw new Error('Answer is not valid for this question.')
+    }
+    return
+  }
+  if (question.questionType === 'boolean') {
+    if (typeof answer !== 'boolean') {
+      throw new Error('Answer is not valid for this question.')
+    }
+    return
+  }
+  if (question.questionType === 'scale') {
+    if (typeof answer !== 'number' || !Number.isInteger(answer) || answer < 0 || answer > 10) {
+      throw new Error('Answer is not valid for this question.')
+    }
+    return
+  }
+  if (question.questionType === 'star') {
+    if (typeof answer !== 'number' || !Number.isInteger(answer) || answer < 1 || answer > 5) {
+      throw new Error('Answer is not valid for this question.')
+    }
+    return
+  }
+  if (typeof answer !== 'string' || answer.trim().length === 0 || answer.length > 1000) {
+    throw new Error('Answer is not valid for this question.')
+  }
+}
+
+export function submitKioskAnswer(sessionToken: string, submittedQuestionKey: string, answerJson: string) {
   const db = getDb()
   return db.transaction(() => {
     const session = db
@@ -842,14 +1024,64 @@ export function submitKioskAnswer(sessionToken: string, questionKey: string, ans
     if (!session) {
       throw new Error('Invalid or completed session.')
     }
+    const assignedQuestion = db
+      .prepare(
+        `SELECT id, question_key AS questionKey, question_version AS questionVersion,
+                question_type AS questionType, prompt, options_json AS optionsJson,
+                is_demographic AS isDemographic
+         FROM kiosk_session_questions
+         WHERE kiosk_session_id = ? AND question_key = ?`,
+      )
+      .get(session.id, submittedQuestionKey) as
+      | {
+          id: number
+          questionKey: string
+          questionVersion: number
+          questionType: QuestionType
+          prompt: string
+          optionsJson: string
+          isDemographic: number
+        }
+      | undefined
+    if (!assignedQuestion) {
+      throw new Error('Question is not assigned to this kiosk session.')
+    }
+    const answer = JSON.parse(answerJson) as unknown
+    const questionSnapshot: KioskAssignedQuestion = {
+      id: assignedQuestion.id,
+      questionKey: assignedQuestion.questionKey,
+      questionVersion: assignedQuestion.questionVersion,
+      questionType: assignedQuestion.questionType,
+      prompt: assignedQuestion.prompt,
+      options: parseOptions(assignedQuestion.optionsJson),
+      isDemographic: Boolean(assignedQuestion.isDemographic),
+    }
+    assertAnswerMatchesQuestion(questionSnapshot, answer)
     db.prepare(
-      `INSERT INTO responses (institution_id, question_key, answer_json, kiosk_session_id)
-       VALUES (?, ?, ?, ?)
+      `INSERT INTO responses
+         (institution_id, question_key, question_prompt, question_type, question_options_json,
+          question_version, is_demographic, answer_json, kiosk_session_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(kiosk_session_id, question_key) WHERE kiosk_session_id IS NOT NULL
        DO UPDATE SET
          answer_json = excluded.answer_json,
+         question_prompt = excluded.question_prompt,
+         question_type = excluded.question_type,
+         question_options_json = excluded.question_options_json,
+         question_version = excluded.question_version,
+         is_demographic = excluded.is_demographic,
          created_at = CURRENT_TIMESTAMP`,
-    ).run(session.institutionId, questionKey, answerJson, session.id)
+    ).run(
+      session.institutionId,
+      questionSnapshot.questionKey,
+      questionSnapshot.prompt,
+      questionSnapshot.questionType,
+      JSON.stringify(questionSnapshot.options),
+      questionSnapshot.questionVersion,
+      questionSnapshot.isDemographic ? 1 : 0,
+      answerJson,
+      session.id,
+    )
     return { recorded: true }
   })()
 }
@@ -927,32 +1159,38 @@ export function getInstitutionAnalytics(institutionId: number, options: { from?:
 
   const responsesByQuestionRaw = db
     .prepare(
-      `SELECT r.question_key AS questionKey, r.answer_json AS answerJson, COUNT(*) AS count
+      `SELECT r.question_key AS questionKey,
+              COALESCE(r.question_prompt, r.question_key) AS prompt,
+              COALESCE(r.question_type, 'unknown') AS questionType,
+              r.answer_json AS answerJson,
+              COUNT(*) AS count
        FROM responses r
        WHERE r.institution_id = ? ${fromClause} ${toClause}
-       GROUP BY r.question_key, r.answer_json
+       GROUP BY r.question_key, prompt, questionType, r.answer_json
        ORDER BY r.question_key, count DESC`,
     )
-    .all(institutionId, ...dateParams) as Array<{ questionKey: string; answerJson: string; count: number }>
+    .all(institutionId, ...dateParams) as Array<{
+      questionKey: string
+      prompt: string
+      questionType: string
+      answerJson: string
+      count: number
+    }>
 
-  const questions = getInstitutionQuestions(institutionId)
-  const questionMap = new Map(questions.map((q) => [q.templateKey ?? `iq-${q.id}`, q]))
-
-  const byQuestion = new Map<string, Array<{ answer: string; count: number }>>()
+  const byQuestion = new Map<string, { prompt: string; questionType: string; responses: Array<{ answer: string; count: number }> }>()
   for (const row of responsesByQuestionRaw) {
-    if (!byQuestion.has(row.questionKey)) byQuestion.set(row.questionKey, [])
-    byQuestion.get(row.questionKey)!.push({ answer: row.answerJson, count: row.count })
+    if (!byQuestion.has(row.questionKey)) {
+      byQuestion.set(row.questionKey, { prompt: row.prompt, questionType: row.questionType, responses: [] })
+    }
+    byQuestion.get(row.questionKey)!.responses.push({ answer: row.answerJson, count: row.count })
   }
 
-  const responsesByQuestion = Array.from(byQuestion.entries()).map(([questionKey, responses]) => {
-    const q = questionMap.get(questionKey)
-    return {
-      questionKey,
-      prompt: q?.prompt ?? questionKey,
-      questionType: q?.questionType ?? 'unknown',
-      responses,
-    }
-  })
+  const responsesByQuestion = Array.from(byQuestion.entries()).map(([questionKey, group]) => ({
+    questionKey,
+    prompt: group.prompt,
+    questionType: group.questionType,
+    responses: group.responses,
+  }))
 
   const responsesPerDay = db
     .prepare(
@@ -965,8 +1203,8 @@ export function getInstitutionAnalytics(institutionId: number, options: { from?:
     )
     .all(institutionId, ...dateParams) as Array<{ date: string; count: number }>
 
-  const demographicQuestions = questions.filter((q) => q.isDemographic)
-  const demoKeys = demographicQuestions.map((q) => q.templateKey ?? `iq-${q.id}`)
+  const questions = getInstitutionQuestions(institutionId)
+  const demoKeys = questions.filter((q) => q.isDemographic).map((q) => questionKey(q))
 
   const demographicBreakdown = responsesByQuestion.filter((rq) => demoKeys.includes(rq.questionKey))
 

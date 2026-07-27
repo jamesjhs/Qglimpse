@@ -97,7 +97,6 @@ Current implementation includes a React/Vite web app, an Express API, PM2 config
 Known pre-production gaps:
 
 - Single-use QR submission is not implemented.
-- Single-question mode is not enforced as a product invariant.
 - XLSX export is not implemented.
 - The PWA manifest exists, but service worker/cache update behaviour is not implemented.
 
@@ -280,9 +279,9 @@ Exit criteria:
 
 ### Phase 4: Question Bank and Scheduling
 
-Status: Not complete. Single-question mode is not yet enforced as a product invariant.
+Status: Completed.
 
-Goal: make Qglimpse's single-question feedback method the core product behaviour.
+Goal: make Qglimpse's single-question feedback method an option for product behaviour.
 
 Work:
 
@@ -307,7 +306,7 @@ Goal: build the real guest-facing collection surface.
 
 Work:
 
-- Add kiosk-only login and kiosk-only route access.
+- Add kiosk-only login and kiosk-only route access (DONE)
 - Prevent kiosk users from reaching staff dashboards.
 - Build an installable kiosk PWA shell suitable for tablets.
 - Add optional single-use QR code display for guest-device submission.

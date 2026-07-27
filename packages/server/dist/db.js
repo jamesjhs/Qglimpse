@@ -5,7 +5,7 @@ import { config } from './config.js';
 import { demographicsTemplates, insightTemplates } from './data/demographics.js';
 let database;
 const sqlitePlaintextHeader = Buffer.from('SQLite format 3\0');
-const currentSchemaVersion = 3;
+const currentSchemaVersion = 4;
 function isPlaintextSqliteDatabase(databasePath) {
     if (!existsSync(databasePath) || statSync(databasePath).size < sqlitePlaintextHeader.length) {
         return false;
@@ -23,21 +23,11 @@ function verifyDatabaseKey(db) {
 }
 function openEncryptedDatabase(databasePath) {
     const encryptionKey = Buffer.from(config.databaseEncryptionKey, 'utf8');
-    const isExistingPlaintextDatabase = isPlaintextSqliteDatabase(databasePath);
+    if (isPlaintextSqliteDatabase(databasePath)) {
+        throw new Error('Refusing to open plaintext SQLite database at QUICKGLIMPSE_DB_PATH. Restore or migrate it with an audited offline SQLCipher process before startup.');
+    }
     const db = new Database(databasePath);
     applyEncryptionSettings(db);
-    if (isExistingPlaintextDatabase) {
-        verifyDatabaseKey(db);
-        db.pragma('wal_checkpoint(TRUNCATE)');
-        db.pragma('journal_mode = DELETE');
-        db.rekey(encryptionKey);
-        db.close();
-        const encryptedDb = new Database(databasePath);
-        applyEncryptionSettings(encryptedDb);
-        encryptedDb.key(encryptionKey);
-        verifyDatabaseKey(encryptedDb);
-        return encryptedDb;
-    }
     db.key(encryptionKey);
     try {
         verifyDatabaseKey(db);
@@ -175,6 +165,11 @@ function runMigrations(db) {
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       institution_id INTEGER NOT NULL,
       question_key TEXT NOT NULL,
+      question_prompt TEXT,
+      question_type TEXT,
+      question_options_json TEXT,
+      question_version INTEGER NOT NULL DEFAULT 1,
+      is_demographic INTEGER NOT NULL DEFAULT 0,
       answer_json TEXT NOT NULL,
       kiosk_session_id INTEGER REFERENCES kiosk_sessions(id) ON DELETE SET NULL,
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -189,6 +184,23 @@ function runMigrations(db) {
       started_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
       completed_at TEXT,
       FOREIGN KEY (institution_id) REFERENCES institutions(id) ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS kiosk_session_questions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      kiosk_session_id INTEGER NOT NULL,
+      institution_question_id INTEGER,
+      question_key TEXT NOT NULL,
+      question_version INTEGER NOT NULL DEFAULT 1,
+      question_type TEXT NOT NULL,
+      prompt TEXT NOT NULL,
+      options_json TEXT NOT NULL,
+      is_demographic INTEGER NOT NULL DEFAULT 0,
+      display_order INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(kiosk_session_id, question_key),
+      FOREIGN KEY (kiosk_session_id) REFERENCES kiosk_sessions(id) ON DELETE CASCADE,
+      FOREIGN KEY (institution_question_id) REFERENCES institution_questions(id) ON DELETE SET NULL
     );
   `);
     const userColumns = db
@@ -272,6 +284,17 @@ function runMigrations(db) {
     if (!iqColNames.has('schedule_end_time')) {
         db.exec(`ALTER TABLE institution_questions ADD COLUMN schedule_end_time TEXT;`);
     }
+    if (!iqColNames.has('question_version')) {
+        db.exec(`ALTER TABLE institution_questions ADD COLUMN question_version INTEGER NOT NULL DEFAULT 1;`);
+    }
+    if (!iqColNames.has('updated_at')) {
+        db.exec(`
+      ALTER TABLE institution_questions ADD COLUMN updated_at TEXT;
+      UPDATE institution_questions
+      SET updated_at = COALESCE(created_at, CURRENT_TIMESTAMP)
+      WHERE updated_at IS NULL;
+    `);
+    }
     const qtColumns = db
         .prepare(`PRAGMA table_info(question_templates)`)
         .all();
@@ -285,6 +308,21 @@ function runMigrations(db) {
     const respColNames = new Set(respColumns.map((c) => c.name));
     if (!respColNames.has('kiosk_session_id')) {
         db.exec(`ALTER TABLE responses ADD COLUMN kiosk_session_id INTEGER REFERENCES kiosk_sessions(id) ON DELETE SET NULL;`);
+    }
+    if (!respColNames.has('question_prompt')) {
+        db.exec(`ALTER TABLE responses ADD COLUMN question_prompt TEXT;`);
+    }
+    if (!respColNames.has('question_type')) {
+        db.exec(`ALTER TABLE responses ADD COLUMN question_type TEXT;`);
+    }
+    if (!respColNames.has('question_options_json')) {
+        db.exec(`ALTER TABLE responses ADD COLUMN question_options_json TEXT;`);
+    }
+    if (!respColNames.has('question_version')) {
+        db.exec(`ALTER TABLE responses ADD COLUMN question_version INTEGER NOT NULL DEFAULT 1;`);
+    }
+    if (!respColNames.has('is_demographic')) {
+        db.exec(`ALTER TABLE responses ADD COLUMN is_demographic INTEGER NOT NULL DEFAULT 0;`);
     }
     const auditColumns = db
         .prepare(`PRAGMA table_info(audit_events)`)
@@ -311,6 +349,9 @@ function runMigrations(db) {
     CREATE UNIQUE INDEX IF NOT EXISTS idx_responses_session_question_unique
       ON responses (kiosk_session_id, question_key)
       WHERE kiosk_session_id IS NOT NULL;
+
+    CREATE INDEX IF NOT EXISTS idx_kiosk_session_questions_session
+      ON kiosk_session_questions (kiosk_session_id, display_order, id);
 
     CREATE INDEX IF NOT EXISTS idx_login_challenges_email_method_active
       ON login_challenges (email, method, consumed_at, expires_at, created_at);
