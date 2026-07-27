@@ -353,6 +353,38 @@ export function ensureSeedCredentials() {
         }
     }
 }
+export function purgeLegacySeedUsers() {
+    const db = getDb();
+    const seedEmails = ['root@quickglimpse.local', 'institution-admin@quickglimpse.local'];
+    const deleted = [];
+    const skipped = [];
+    db.transaction(() => {
+        for (const email of seedEmails) {
+            const user = db
+                .prepare('SELECT id, role FROM users WHERE email = ?')
+                .get(email);
+            if (!user) {
+                skipped.push(email);
+                continue;
+            }
+            if (user.role === 'root') {
+                const otherRoot = db
+                    .prepare(`SELECT id FROM users WHERE role = 'root' AND status = 'active' AND id != ? LIMIT 1`)
+                    .get(user.id);
+                if (!otherRoot) {
+                    throw new Error(`Refusing to delete ${email} because no other active root account exists. Run admin:init with your real root email first, then retry.`);
+                }
+            }
+            db.prepare('UPDATE audit_events SET actor_user_id = NULL WHERE actor_user_id = ?').run(user.id);
+            db.prepare('UPDATE audit_events SET target_user_id = NULL WHERE target_user_id = ?').run(user.id);
+            db.prepare('DELETE FROM auth_sessions WHERE user_id = ?').run(user.id);
+            db.prepare('DELETE FROM user_credentials WHERE user_id = ?').run(user.id);
+            db.prepare('DELETE FROM users WHERE id = ?').run(user.id);
+            deleted.push(email);
+        }
+    })();
+    return { deleted, skipped };
+}
 export function ensureInitialAdminLogin(input) {
     const db = getDb();
     const normalizedEmail = normalizeEmail(input.email);

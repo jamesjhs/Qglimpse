@@ -3,7 +3,7 @@ import rateLimit from 'express-rate-limit'
 import path from 'node:path'
 import { existsSync, realpathSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
-import type { Server } from 'node:http'
+import { createServer, type Server } from 'node:http'
 import { randomUUID } from 'node:crypto'
 import { z } from 'zod'
 import {
@@ -13,7 +13,7 @@ import {
   confirmPasswordReset,
   ensureInitialAdminLogin,
   deleteManagedUser,
-  ensureSeedCredentials,
+  purgeLegacySeedUsers,
   listUsers,
   loginUser,
   logoutSession,
@@ -106,10 +106,6 @@ function initializeRuntime() {
   runRetentionCleanup()
   writeStartupLog('info', 'Retention cleanup completed.')
 
-  if (!config.isProduction) {
-    writeStartupLog('warn', 'Non-production seed credentials are enabled.')
-    ensureSeedCredentials()
-  }
 }
 
 const kioskSchema = z.object({
@@ -1709,8 +1705,19 @@ function printAdminInitUsage() {
 function startHttpServer() {
   writeStartupLog('info', 'Creating Express application.')
   const app = createApp()
-  writeStartupLog('info', 'Calling app.listen().', { port: config.port })
-  const server: Server = app.listen(config.port, () => {
+  const server: Server = createServer(app)
+
+  server.once('error', (error) => {
+    writeStartupLog('error', 'HTTP server listen error.', {
+      errorName: error.name,
+      errorMessage: error.message,
+      stack: error.stack,
+      port: config.port,
+    })
+    process.exitCode = 1
+  })
+
+  server.once('listening', () => {
     const address = server.address()
     writeStartupLog('info', 'Qglimpse HTTP server is listening.', {
       port: config.port,
@@ -1720,15 +1727,8 @@ function startHttpServer() {
     console.log(`Qglimpse listening on ${config.baseUrl} (port ${config.port})`)
   })
 
-  server.on('error', (error) => {
-    writeStartupLog('error', 'HTTP server listen error.', {
-      errorName: error.name,
-      errorMessage: error.message,
-      stack: error.stack,
-      port: config.port,
-    })
-    process.exitCode = 1
-  })
+  writeStartupLog('info', 'Calling server.listen().', { port: config.port })
+  server.listen(config.port)
 
   return server
 }
@@ -1752,6 +1752,15 @@ if (isDirectRun()) {
     } catch (error) {
       console.error(error instanceof Error ? error.message : String(error))
       printAdminInitUsage()
+      process.exitCode = 1
+    }
+  } else if (process.argv[2] === 'purge-seed-users') {
+    try {
+      const result = purgeLegacySeedUsers()
+      console.log(`Deleted legacy seed users: ${result.deleted.length ? result.deleted.join(', ') : 'none'}.`)
+      console.log(`Not present: ${result.skipped.length ? result.skipped.join(', ') : 'none'}.`)
+    } catch (error) {
+      console.error(error instanceof Error ? error.message : String(error))
       process.exitCode = 1
     }
   } else {

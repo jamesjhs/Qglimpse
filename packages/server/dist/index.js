@@ -3,9 +3,10 @@ import rateLimit from 'express-rate-limit';
 import path from 'node:path';
 import { existsSync, realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import { createServer } from 'node:http';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
-import { authenticateSession, changeRequiredPassword, changeOwnPassword, confirmPasswordReset, ensureInitialAdminLogin, deleteManagedUser, ensureSeedCredentials, listUsers, loginUser, logoutSession, registerUser, toggle2FA, updateManagedUser, updateUserEmail, updateUserStatus, userRoles, userStatuses, verifyMagicLinkChallenge, verifyOtpChallenge, verifyTurnstileToken, } from './auth.js';
+import { authenticateSession, changeRequiredPassword, changeOwnPassword, confirmPasswordReset, ensureInitialAdminLogin, deleteManagedUser, purgeLegacySeedUsers, listUsers, loginUser, logoutSession, registerUser, toggle2FA, updateManagedUser, updateUserEmail, updateUserStatus, userRoles, userStatuses, verifyMagicLinkChallenge, verifyOtpChallenge, verifyTurnstileToken, } from './auth.js';
 import { buildBootstrapPayload, confirmEmailVerification, createCustomQuestion, createInstitution, createInstitutionUser, createLoginChallenge, deleteCustomQuestion, deleteInstitution, getInstitution, getInstitutionAnalytics, getInstitutionQuestions, getCrossTabulation, getKioskStatus, getRootOverview, getSmtpSettings, listInstitutions, listInstitutionUsers, listQuestionTemplates, requestEmailVerification, requestPasswordReset, runRetentionCleanup, sendTestSmtpEmail, setInstitutionColorScheme, startKioskSession, submitKioskAnswer, completeKioskSession, toggleInstitutionKioskMode, updateInstitution, updateInstitutionQuestion, updateInstitutionStatus, updateSmtpSettings, } from './services.js';
 import { config } from './config.js';
 import { getDb } from './db.js';
@@ -48,10 +49,6 @@ function initializeRuntime() {
     writeStartupLog('info', 'Running retention cleanup.');
     runRetentionCleanup();
     writeStartupLog('info', 'Retention cleanup completed.');
-    if (!config.isProduction) {
-        writeStartupLog('warn', 'Non-production seed credentials are enabled.');
-        ensureSeedCredentials();
-    }
 }
 const kioskSchema = z.object({
     enabled: z.boolean(),
@@ -1495,17 +1492,8 @@ function printAdminInitUsage() {
 function startHttpServer() {
     writeStartupLog('info', 'Creating Express application.');
     const app = createApp();
-    writeStartupLog('info', 'Calling app.listen().', { port: config.port });
-    const server = app.listen(config.port, () => {
-        const address = server.address();
-        writeStartupLog('info', 'Qglimpse HTTP server is listening.', {
-            port: config.port,
-            baseUrl: config.baseUrl,
-            address,
-        });
-        console.log(`Qglimpse listening on ${config.baseUrl} (port ${config.port})`);
-    });
-    server.on('error', (error) => {
+    const server = createServer(app);
+    server.once('error', (error) => {
         writeStartupLog('error', 'HTTP server listen error.', {
             errorName: error.name,
             errorMessage: error.message,
@@ -1514,6 +1502,17 @@ function startHttpServer() {
         });
         process.exitCode = 1;
     });
+    server.once('listening', () => {
+        const address = server.address();
+        writeStartupLog('info', 'Qglimpse HTTP server is listening.', {
+            port: config.port,
+            baseUrl: config.baseUrl,
+            address,
+        });
+        console.log(`Qglimpse listening on ${config.baseUrl} (port ${config.port})`);
+    });
+    writeStartupLog('info', 'Calling server.listen().', { port: config.port });
+    server.listen(config.port);
     return server;
 }
 if (isDirectRun()) {
@@ -1537,6 +1536,17 @@ if (isDirectRun()) {
         catch (error) {
             console.error(error instanceof Error ? error.message : String(error));
             printAdminInitUsage();
+            process.exitCode = 1;
+        }
+    }
+    else if (process.argv[2] === 'purge-seed-users') {
+        try {
+            const result = purgeLegacySeedUsers();
+            console.log(`Deleted legacy seed users: ${result.deleted.length ? result.deleted.join(', ') : 'none'}.`);
+            console.log(`Not present: ${result.skipped.length ? result.skipped.join(', ') : 'none'}.`);
+        }
+        catch (error) {
+            console.error(error instanceof Error ? error.message : String(error));
             process.exitCode = 1;
         }
     }

@@ -413,19 +413,6 @@ function seedInstitution(db: Database.Database): SeedInstitution {
   return { id: Number(result.lastInsertRowid) }
 }
 
-function seedUsers(db: Database.Database, institutionId: number) {
-  db.prepare('INSERT OR IGNORE INTO users (email, role, institution_id) VALUES (?, ?, ?)').run(
-    'root@quickglimpse.local',
-    'root',
-    null,
-  )
-  db.prepare('INSERT OR IGNORE INTO users (email, role, institution_id) VALUES (?, ?, ?)').run(
-    'institution-admin@quickglimpse.local',
-    'institution_admin',
-    institutionId,
-  )
-}
-
 function seedQuestionTemplates(db: Database.Database, institutionId: number) {
   const insertTemplate = db.prepare(
     `INSERT OR IGNORE INTO question_templates (template_key, question_type, prompt, options_json, is_demographic)
@@ -499,9 +486,6 @@ export function getDb() {
   db.pragma('journal_mode = WAL')
   runMigrations(db)
   const institution = seedInstitution(db)
-  if (!config.isProduction) {
-    seedUsers(db, institution.id)
-  }
   seedQuestionTemplates(db, institution.id)
   seedSmtpSettings(db)
   database = db

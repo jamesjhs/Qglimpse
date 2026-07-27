@@ -380,10 +380,6 @@ function seedInstitution(db) {
     const result = insert.run('Downtown Clinic', 'downtown-clinic', 'America/New_York', 1, 'ocean');
     return { id: Number(result.lastInsertRowid) };
 }
-function seedUsers(db, institutionId) {
-    db.prepare('INSERT OR IGNORE INTO users (email, role, institution_id) VALUES (?, ?, ?)').run('root@quickglimpse.local', 'root', null);
-    db.prepare('INSERT OR IGNORE INTO users (email, role, institution_id) VALUES (?, ?, ?)').run('institution-admin@quickglimpse.local', 'institution_admin', institutionId);
-}
 function seedQuestionTemplates(db, institutionId) {
     const insertTemplate = db.prepare(`INSERT OR IGNORE INTO question_templates (template_key, question_type, prompt, options_json, is_demographic)
      VALUES (@template_key, @question_type, @prompt, @options_json, @is_demographic)`);
@@ -435,9 +431,6 @@ export function getDb() {
     db.pragma('journal_mode = WAL');
     runMigrations(db);
     const institution = seedInstitution(db);
-    if (!config.isProduction) {
-        seedUsers(db, institution.id);
-    }
     seedQuestionTemplates(db, institution.id);
     seedSmtpSettings(db);
     database = db;
