@@ -407,8 +407,11 @@ function assertValidQuestionConfiguration(input) {
     if ((input.questionType === 'single' || input.questionType === 'multiple') && input.options.length < 2) {
         throw new Error('Single and multiple choice questions require at least two options.');
     }
-    if (!['single', 'multiple'].includes(input.questionType) && input.options.length > 0) {
-        throw new Error('Options are only allowed for single and multiple choice questions.');
+    if ((input.questionType === 'boolean' || input.questionType === 'scale' || input.questionType === 'star') && input.options.length > 0 && input.options.length !== 2) {
+        throw new Error('Boolean, scale, and star questions may define exactly two display labels.');
+    }
+    if (input.questionType === 'text' && input.options.length > 0) {
+        throw new Error('Options are not allowed for text questions.');
     }
     if (input.options.some((option) => option.trim().length === 0 || option.length > 120)) {
         throw new Error('Question options must be non-empty and 120 characters or fewer.');

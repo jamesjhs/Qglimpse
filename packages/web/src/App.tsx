@@ -234,6 +234,22 @@ function getQuestionKey(question: { id: number; templateKey?: string | null; que
   return question.questionKey ?? question.templateKey ?? `iq-${question.id}`
 }
 
+function defaultOptionRowsForType(questionType: Question['questionType']) {
+  if (questionType === 'boolean') return ['Yes', 'No']
+  if (questionType === 'scale') return ['Poor', 'Excellent']
+  if (questionType === 'star') return ['Low', 'High']
+  if (questionType === 'single' || questionType === 'multiple') return ['', '']
+  return []
+}
+
+function questionNeedsListOptions(questionType: Question['questionType']) {
+  return questionType === 'single' || questionType === 'multiple'
+}
+
+function questionNeedsEndpointLabels(questionType: Question['questionType']) {
+  return questionType === 'boolean' || questionType === 'scale' || questionType === 'star'
+}
+
 async function readJsonBody<T>(response: Response, fallback: string): Promise<T> {
   const text = await response.text()
   if (!text.trim()) {
@@ -284,26 +300,92 @@ const fallbackTimezones = [
   'Pacific/Auckland',
 ]
 
+const capitalTimezoneNames: Record<string, string> = {
+  'Africa/Abidjan': 'Yamoussoukro',
+  'Africa/Accra': 'Accra',
+  'Africa/Addis_Ababa': 'Addis Ababa',
+  'Africa/Algiers': 'Algiers',
+  'Africa/Cairo': 'Cairo',
+  'Africa/Casablanca': 'Rabat',
+  'Africa/Johannesburg': 'Pretoria',
+  'Africa/Lagos': 'Abuja',
+  'Africa/Nairobi': 'Nairobi',
+  'America/Anchorage': 'Juneau',
+  'America/Argentina/Buenos_Aires': 'Buenos Aires',
+  'America/Bogota': 'Bogota',
+  'America/Caracas': 'Caracas',
+  'America/Chicago': 'Chicago',
+  'America/Denver': 'Denver',
+  'America/Guatemala': 'Guatemala City',
+  'America/Halifax': 'Halifax',
+  'America/Havana': 'Havana',
+  'America/Lima': 'Lima',
+  'America/Los_Angeles': 'Los Angeles',
+  'America/Mexico_City': 'Mexico City',
+  'America/New_York': 'Washington DC',
+  'America/Phoenix': 'Phoenix',
+  'America/Santiago': 'Santiago',
+  'America/Sao_Paulo': 'Brasilia',
+  'America/St_Johns': "St John's",
+  'America/Toronto': 'Ottawa',
+  'Asia/Amman': 'Amman',
+  'Asia/Baghdad': 'Baghdad',
+  'Asia/Baku': 'Baku',
+  'Asia/Bangkok': 'Bangkok',
+  'Asia/Beirut': 'Beirut',
+  'Asia/Dhaka': 'Dhaka',
+  'Asia/Dubai': 'Abu Dhabi',
+  'Asia/Hong_Kong': 'Hong Kong',
+  'Asia/Jakarta': 'Jakarta',
+  'Asia/Jerusalem': 'Jerusalem',
+  'Asia/Kabul': 'Kabul',
+  'Asia/Kathmandu': 'Kathmandu',
+  'Asia/Kolkata': 'New Delhi',
+  'Asia/Manila': 'Manila',
+  'Asia/Riyadh': 'Riyadh',
+  'Asia/Seoul': 'Seoul',
+  'Asia/Shanghai': 'Beijing',
+  'Asia/Singapore': 'Singapore',
+  'Asia/Taipei': 'Taipei',
+  'Asia/Tehran': 'Tehran',
+  'Asia/Tokyo': 'Tokyo',
+  'Asia/Yerevan': 'Yerevan',
+  'Atlantic/Reykjavik': 'Reykjavik',
+  'Australia/Adelaide': 'Adelaide',
+  'Australia/Brisbane': 'Brisbane',
+  'Australia/Darwin': 'Darwin',
+  'Australia/Perth': 'Perth',
+  'Australia/Sydney': 'Canberra',
+  'Europe/Amsterdam': 'Amsterdam',
+  'Europe/Athens': 'Athens',
+  'Europe/Berlin': 'Berlin',
+  'Europe/Brussels': 'Brussels',
+  'Europe/Bucharest': 'Bucharest',
+  'Europe/Budapest': 'Budapest',
+  'Europe/Copenhagen': 'Copenhagen',
+  'Europe/Dublin': 'Dublin',
+  'Europe/Helsinki': 'Helsinki',
+  'Europe/Istanbul': 'Ankara',
+  'Europe/Lisbon': 'Lisbon',
+  'Europe/London': 'London',
+  'Europe/Madrid': 'Madrid',
+  'Europe/Oslo': 'Oslo',
+  'Europe/Paris': 'Paris',
+  'Europe/Prague': 'Prague',
+  'Europe/Rome': 'Rome',
+  'Europe/Stockholm': 'Stockholm',
+  'Europe/Vienna': 'Vienna',
+  'Europe/Warsaw': 'Warsaw',
+  'Pacific/Auckland': 'Wellington',
+  'Pacific/Honolulu': 'Honolulu',
+}
+
 function getSupportedTimezones() {
   const supported =
     typeof Intl.supportedValuesOf === 'function'
       ? Intl.supportedValuesOf('timeZone')
       : fallbackTimezones
   return Array.from(new Set(['UTC', ...supported, ...fallbackTimezones])).sort((a, b) => a.localeCompare(b))
-}
-
-function getTimezoneOffsetLabel(timezone: string) {
-  try {
-    const part = new Intl.DateTimeFormat('en-GB', {
-      timeZone: timezone,
-      timeZoneName: 'shortOffset',
-    })
-      .formatToParts(new Date())
-      .find((item) => item.type === 'timeZoneName')?.value
-    return part ?? ''
-  } catch {
-    return ''
-  }
 }
 
 function getTimezoneOffsetMinutes(timezone: string) {
@@ -334,22 +416,76 @@ function getTimezoneOffsetMinutes(timezone: string) {
   }
 }
 
-function formatTimezoneLabel(timezone: string) {
-  if (timezone === 'UTC') {
-    return 'UTC - Coordinated Universal Time'
+function formatUtcOffset(minutes: number) {
+  if (minutes === 0) {
+    return 'UTC+00:00'
   }
-
-  const [region, ...placeParts] = timezone.split('/')
-  const place = (placeParts.join(' / ') || timezone).replaceAll('_', ' ')
-  const offset = getTimezoneOffsetLabel(timezone)
-  return `${place} (${region.replaceAll('_', ' ')}${offset ? `, ${offset}` : ''})`
+  const sign = minutes >= 0 ? '+' : '-'
+  const absolute = Math.abs(minutes)
+  const hours = Math.floor(absolute / 60)
+  const mins = absolute % 60
+  return `UTC${sign}${String(hours).padStart(2, '0')}:${String(mins).padStart(2, '0')}`
 }
 
-const timezoneChoices = getSupportedTimezones().map((value) => ({
-  value,
-  label: formatTimezoneLabel(value),
-  offsetMinutes: getTimezoneOffsetMinutes(value),
-})).sort((a, b) => a.offsetMinutes - b.offsetMinutes || a.label.localeCompare(b.label))
+function getTimezonePlaceName(timezone: string) {
+  if (timezone === 'UTC') {
+    return 'Coordinated Universal Time'
+  }
+  return (
+    capitalTimezoneNames[timezone] ??
+    (timezone
+      .split('/')
+      .slice(1)
+      .join(' / ')
+      .replaceAll('_', ' ') ||
+    timezone
+    )
+  )
+}
+
+function formatTimezoneLabel(timezone: string) {
+  const offsetMinutes = getTimezoneOffsetMinutes(timezone)
+  const region = timezone.includes('/') ? timezone.split('/')[0].replaceAll('_', ' ') : ''
+  const place = getTimezonePlaceName(timezone)
+  return `${formatUtcOffset(offsetMinutes)} - ${place}${region ? ` (${timezone})` : ''}`
+}
+
+const timezoneChoices = getSupportedTimezones()
+  .map((value) => {
+    const offsetMinutes = getTimezoneOffsetMinutes(value)
+    return {
+      value,
+      label: formatTimezoneLabel(value),
+      offsetLabel: formatUtcOffset(offsetMinutes),
+      offsetMinutes,
+      place: getTimezonePlaceName(value),
+    }
+  })
+  .sort((a, b) => a.offsetMinutes - b.offsetMinutes || a.place.localeCompare(b.place) || a.value.localeCompare(b.value))
+
+const timezoneChoiceGroups = Array.from(
+  timezoneChoices
+    .reduce((groups, choice) => {
+      const group = groups.get(choice.offsetLabel) ?? {
+        label: choice.offsetLabel,
+        offsetMinutes: choice.offsetMinutes,
+        choices: [] as typeof timezoneChoices,
+      }
+      group.choices.push(choice)
+      groups.set(choice.offsetLabel, group)
+      return groups
+    }, new Map<string, { label: string; offsetMinutes: number; choices: typeof timezoneChoices }>())
+    .values(),
+).sort((a, b) => a.offsetMinutes - b.offsetMinutes)
+
+function formatTimezoneGroupLabel(group: { label: string; choices: typeof timezoneChoices }) {
+  const capitalNames = group.choices
+    .filter((choice) => capitalTimezoneNames[choice.value] || choice.value === 'UTC')
+    .map((choice) => choice.place)
+    .filter((place, index, places) => places.indexOf(place) === index)
+    .slice(0, 4)
+  return capitalNames.length > 0 ? `${group.label} - ${capitalNames.join(', ')}` : group.label
+}
 
 declare global {
   interface Window {
@@ -578,6 +714,8 @@ function App() {
     secureLoginType: 'starttls',
   })
   const [institutionQuestions, setInstitutionQuestions] = useState<Question[]>([])
+  const [customQuestionType, setCustomQuestionType] = useState<Question['questionType']>('text')
+  const [customQuestionOptions, setCustomQuestionOptions] = useState<string[]>([])
   const [analyticsData, setAnalyticsData] = useState<AnalyticsData | null>(null)
   const [analyticsFrom, setAnalyticsFrom] = useState(() => {
     const d = new Date()
@@ -800,6 +938,7 @@ function App() {
               Choose a new password with at least 10 characters.
             </p>
             <form className="mt-5 grid gap-3" onSubmit={(event) => void changePassword(event).catch((err: unknown) => setError(err instanceof Error ? err.message : 'Password change failed.'))}>
+              <PasswordInput autoComplete="current-password" name="currentPassword" placeholder="Old password" />
               <PasswordInput autoComplete="new-password" name="newPassword" placeholder="New password (min 10 chars)" />
               <PasswordInput autoComplete="new-password" name="confirmPassword" placeholder="Verify new password" />
               <button className="w-full rounded-full bg-[var(--brand-700)] px-5 py-2.5 text-sm font-semibold text-white shadow-lg shadow-[color:var(--brand-shadow)] sm:w-fit" type="submit">
@@ -1348,15 +1487,15 @@ function App() {
     const formData = new FormData(event.currentTarget)
     const institutionId = selectedInstitution?.id
     if (!institutionId) return
-    const optionsRaw = String(formData.get('options') ?? '')
-    const options = optionsRaw ? optionsRaw.split(',').map((s) => s.trim()).filter(Boolean) : []
+    const questionType = String(formData.get('questionType') ?? 'text') as Question['questionType']
+    const options = formData.getAll('options').map((value) => String(value).trim()).filter(Boolean)
     const scheduleDaysRaw = String(formData.get('scheduleDays') ?? '')
     const scheduleDays = scheduleDaysRaw ? scheduleDaysRaw.split(',').map(Number).filter((n) => !isNaN(n) && n >= 0 && n <= 6) : []
     const response = await fetch(`/api/institutions/${institutionId}/questions`, {
       method: 'POST',
       headers: { Authorization: `Bearer ${authToken}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        questionType: String(formData.get('questionType') ?? 'text'),
+        questionType,
         prompt: String(formData.get('prompt') ?? ''),
         options,
         includeInKiosk: formData.get('includeInKiosk') === 'true',
@@ -1374,6 +1513,8 @@ function App() {
     const created = (await response.json()) as Question
     setInstitutionQuestions((current) => [...current, created])
     event.currentTarget.reset()
+    setCustomQuestionType('text')
+    setCustomQuestionOptions([])
   }
 
   const deleteQuestion = async (question: Question) => {
@@ -2119,22 +2260,19 @@ function App() {
                             <label className="grid gap-1 text-sm font-medium">
                               Timezone
                               <select
-                                className="rounded-xl border border-slate-300 px-3 py-2 disabled:bg-slate-100 disabled:text-slate-500"
+                                className="rounded-xl border border-slate-300 px-3 py-2"
                                 defaultValue={institution.timezone}
-                                disabled={sessionUser?.role !== 'root'}
                                 name="timezone"
                                 required
                               >
-                                {timezoneChoices.map((timezone) => (
-                                  <option key={timezone.value} value={timezone.value}>{timezone.label}</option>
+                                {timezoneChoiceGroups.map((group) => (
+                                  <optgroup key={group.label} label={formatTimezoneGroupLabel(group)}>
+                                    {group.choices.map((timezone) => (
+                                      <option key={timezone.value} value={timezone.value}>{timezone.label}</option>
+                                    ))}
+                                  </optgroup>
                                 ))}
                               </select>
-                              {sessionUser?.role !== 'root' ? (
-                                <>
-                                  <input name="timezone" type="hidden" value={institution.timezone} />
-                                  <span className="text-xs text-slate-500">Root users manage timezone changes.</span>
-                                </>
-                              ) : null}
                             </label>
                             <label className="grid gap-1 text-sm font-medium">
                               Theme
@@ -2401,7 +2539,16 @@ function App() {
                         <div className="grid gap-4 sm:grid-cols-2">
                           <label className="grid gap-2 text-sm font-medium">
                             Type
-                            <select className="rounded-xl border border-slate-300 px-3 py-2" name="questionType">
+                            <select
+                              className="rounded-xl border border-slate-300 px-3 py-2"
+                              name="questionType"
+                              value={customQuestionType}
+                              onChange={(event) => {
+                                const nextType = event.target.value as Question['questionType']
+                                setCustomQuestionType(nextType)
+                                setCustomQuestionOptions(defaultOptionRowsForType(nextType))
+                              }}
+                            >
                               {(bootstrap.questionTypes ?? ['text', 'single', 'multiple', 'scale', 'boolean', 'star']).map((t) => (
                                 <option key={t} value={t}>{t}</option>
                               ))}
@@ -2416,10 +2563,74 @@ function App() {
                           Prompt
                           <input className="rounded-xl border border-slate-300 px-3 py-2" name="prompt" placeholder="Enter the question text" required />
                         </label>
-                        <label className="grid gap-2 text-sm font-medium">
-                          Options (comma-separated, for single/multiple types)
-                          <input className="rounded-xl border border-slate-300 px-3 py-2" name="options" placeholder="Option A, Option B, Option C" />
-                        </label>
+                        {questionNeedsListOptions(customQuestionType) ? (
+                          <fieldset className="grid gap-3 rounded-xl border border-slate-200 px-4 py-3">
+                            <legend className="px-1 text-sm font-semibold text-slate-900">
+                              {customQuestionType === 'single' ? 'Single-choice options' : 'Multiple-choice options'}
+                            </legend>
+                            <div className="grid gap-2">
+                              {customQuestionOptions.map((option, index) => (
+                                <div className="grid gap-2 sm:grid-cols-[auto_1fr_auto] sm:items-center" key={`option-${index}`}>
+                                  <span className="text-sm font-medium text-slate-600">Option {index + 1}</span>
+                                  <input
+                                    className="rounded-xl border border-slate-300 px-3 py-2"
+                                    name="options"
+                                    placeholder={`Option ${index + 1}`}
+                                    required
+                                    value={option}
+                                    onChange={(event) =>
+                                      setCustomQuestionOptions((current) => current.map((item, itemIndex) => (itemIndex === index ? event.target.value : item)))
+                                    }
+                                  />
+                                  <button
+                                    className="rounded-full bg-slate-100 px-3 py-1.5 text-xs font-semibold text-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
+                                    disabled={customQuestionOptions.length <= 2}
+                                    onClick={() => setCustomQuestionOptions((current) => current.filter((_, itemIndex) => itemIndex !== index))}
+                                    type="button"
+                                  >
+                                    Remove
+                                  </button>
+                                </div>
+                              ))}
+                            </div>
+                            <button
+                              className="w-fit rounded-full bg-slate-900 px-4 py-2 text-sm font-semibold text-white"
+                              onClick={() => setCustomQuestionOptions((current) => [...current, ''])}
+                              type="button"
+                            >
+                              Add option
+                            </button>
+                          </fieldset>
+                        ) : null}
+                        {questionNeedsEndpointLabels(customQuestionType) ? (
+                          <fieldset className="grid gap-3 rounded-xl border border-slate-200 px-4 py-3">
+                            <legend className="px-1 text-sm font-semibold text-slate-900">
+                              {customQuestionType === 'boolean' ? 'Button labels' : 'Endpoint labels'}
+                            </legend>
+                            <div className="grid gap-3 sm:grid-cols-2">
+                              <label className="grid gap-2 text-sm font-medium">
+                                {customQuestionType === 'boolean' ? 'True / positive value' : 'Low end'}
+                                <input
+                                  className="rounded-xl border border-slate-300 px-3 py-2"
+                                  name="options"
+                                  required
+                                  value={customQuestionOptions[0] ?? ''}
+                                  onChange={(event) => setCustomQuestionOptions((current) => [event.target.value, current[1] ?? ''])}
+                                />
+                              </label>
+                              <label className="grid gap-2 text-sm font-medium">
+                                {customQuestionType === 'boolean' ? 'False / negative value' : 'High end'}
+                                <input
+                                  className="rounded-xl border border-slate-300 px-3 py-2"
+                                  name="options"
+                                  required
+                                  value={customQuestionOptions[1] ?? ''}
+                                  onChange={(event) => setCustomQuestionOptions((current) => [current[0] ?? '', event.target.value])}
+                                />
+                              </label>
+                            </div>
+                          </fieldset>
+                        ) : null}
                         <div className="grid gap-3 text-sm sm:flex sm:gap-6">
                           <label className="flex items-center gap-2 font-medium">
                             <input name="includeInKiosk" type="hidden" value="false" />
@@ -2749,8 +2960,9 @@ function App() {
                     <p className="mt-3 text-sm text-amber-700">Login required.</p>
                   ) : (
                     <form className="mt-4 grid gap-3" onSubmit={(event) => void changePassword(event).catch((err: unknown) => setError(err instanceof Error ? err.message : 'Failed.'))}>
-                      <PasswordInput autoComplete="current-password" name="currentPassword" placeholder="Current password" />
+                      <PasswordInput autoComplete="current-password" name="currentPassword" placeholder="Old password" />
                       <PasswordInput autoComplete="new-password" name="newPassword" placeholder="New password (min 10 chars)" />
+                      <PasswordInput autoComplete="new-password" name="confirmPassword" placeholder="Verify new password" />
                       <button className="w-full rounded-full bg-slate-900 px-5 py-2.5 text-sm font-semibold text-white sm:w-fit" type="submit">Update password</button>
                     </form>
                   )}
@@ -3081,19 +3293,33 @@ function GuestQuestionField({
           ))
         ) : question.questionType === 'boolean' ? (
           <div className="grid grid-cols-2 gap-3">
-            <button className={`rounded-xl px-4 py-3 font-semibold ${value === true ? 'bg-[var(--brand-600)]' : 'bg-slate-700'}`} onClick={() => onChange(true)} type="button">Yes</button>
-            <button className={`rounded-xl px-4 py-3 font-semibold ${value === false ? 'bg-[var(--brand-600)]' : 'bg-slate-700'}`} onClick={() => onChange(false)} type="button">No</button>
+            <button className={`rounded-xl px-4 py-3 font-semibold ${value === true ? 'bg-[var(--brand-600)]' : 'bg-slate-700'}`} onClick={() => onChange(true)} type="button">
+              {question.options[0] ?? 'Yes'}
+            </button>
+            <button className={`rounded-xl px-4 py-3 font-semibold ${value === false ? 'bg-[var(--brand-600)]' : 'bg-slate-700'}`} onClick={() => onChange(false)} type="button">
+              {question.options[1] ?? 'No'}
+            </button>
           </div>
         ) : question.questionType === 'scale' ? (
           <div>
             <input className="w-full accent-[var(--brand-500)]" max="10" min="0" type="range" value={typeof value === 'number' ? value : 5} onChange={(event) => onChange(Number(event.target.value))} />
-            <p className="mt-2 text-center text-2xl font-semibold">{typeof value === 'number' ? value : 5}</p>
+            <div className="mt-2 grid grid-cols-[1fr_auto_1fr] gap-2 text-sm text-slate-400">
+              <span>{question.options[0] ?? '0'}</span>
+              <span className="text-2xl font-semibold text-white">{typeof value === 'number' ? value : 5}</span>
+              <span className="text-right">{question.options[1] ?? '10'}</span>
+            </div>
           </div>
         ) : question.questionType === 'star' ? (
-          <div className="flex justify-between gap-2">
-            {[1, 2, 3, 4, 5].map((star) => (
-              <button key={star} className={`min-h-12 min-w-12 text-4xl ${typeof value === 'number' && value >= star ? 'text-amber-400' : 'text-slate-600'}`} onClick={() => onChange(star)} type="button">★</button>
-            ))}
+          <div>
+            <div className="flex justify-between gap-2">
+              {[1, 2, 3, 4, 5].map((star) => (
+                <button key={star} className={`min-h-12 min-w-12 text-4xl ${typeof value === 'number' && value >= star ? 'text-amber-400' : 'text-slate-600'}`} onClick={() => onChange(star)} type="button">★</button>
+              ))}
+            </div>
+            <div className="mt-2 flex justify-between gap-4 text-sm text-slate-400">
+              <span>{question.options[0] ?? 'Low'}</span>
+              <span className="text-right">{question.options[1] ?? 'High'}</span>
+            </div>
           </div>
         ) : (
           <textarea className="min-h-28 rounded-xl bg-slate-700 px-4 py-3 text-white placeholder-slate-400" maxLength={1000} placeholder="Type your answer here" value={stringValue} onChange={(event) => onChange(event.target.value)} />
@@ -3221,17 +3447,23 @@ function KioskFullScreen(props: KioskFullScreenProps) {
             <h2 className="text-xl font-semibold leading-snug sm:text-2xl">{currentQuestion.prompt}</h2>
             <div className="mt-6">
               {currentQuestion.questionType === 'star' ? (
-                <div className="flex justify-between gap-2 sm:justify-start sm:gap-3">
-                  {[1, 2, 3, 4, 5].map((star) => (
-                    <button
-                      key={star}
-                    className={`min-h-12 min-w-12 text-4xl transition ${kioskStarValue >= star ? 'text-amber-400' : 'text-slate-600'}`}
-                      onClick={() => onStarChange(star)}
-                      type="button"
-                    >
-                      ★
-                    </button>
-                  ))}
+                <div>
+                  <div className="flex justify-between gap-2 sm:justify-start sm:gap-3">
+                    {[1, 2, 3, 4, 5].map((star) => (
+                      <button
+                        key={star}
+                      className={`min-h-12 min-w-12 text-4xl transition ${kioskStarValue >= star ? 'text-amber-400' : 'text-slate-600'}`}
+                        onClick={() => onStarChange(star)}
+                        type="button"
+                      >
+                        ★
+                      </button>
+                    ))}
+                  </div>
+                  <div className="mt-3 flex justify-between gap-4 text-sm text-slate-400">
+                    <span>{currentQuestion.options[0] ?? 'Low'}</span>
+                    <span className="text-right">{currentQuestion.options[1] ?? 'High'}</span>
+                  </div>
                 </div>
               ) : currentQuestion.questionType === 'scale' ? (
                 <div>
@@ -3244,21 +3476,24 @@ function KioskFullScreen(props: KioskFullScreenProps) {
                     onChange={(event) => onSliderChange(Number(event.target.value))}
                   />
                   <div className="mt-2 grid grid-cols-[1fr_auto_1fr] gap-2 text-sm text-slate-400">
-                    <span>0 — Poor</span>
+                    <span>{currentQuestion.options[0] ?? '0 - Poor'}</span>
                     <span className="text-2xl font-semibold text-white">{kioskSliderValue}</span>
-                    <span className="text-right">10 — Excellent</span>
+                    <span className="text-right">{currentQuestion.options[1] ?? '10 - Excellent'}</span>
                   </div>
                 </div>
               ) : currentQuestion.questionType === 'boolean' ? (
                 <div className="flex gap-4">
-                  {['yes', 'no'].map((opt) => (
+                  {[
+                    { value: 'yes', label: currentQuestion.options[0] ?? 'Yes' },
+                    { value: 'no', label: currentQuestion.options[1] ?? 'No' },
+                  ].map((opt) => (
                     <button
-                      key={opt}
-                      className={`flex-1 rounded-2xl py-4 text-lg font-semibold transition ${kioskCurrentAnswer === opt ? 'bg-[var(--brand-600)] text-white' : 'bg-slate-700 text-slate-200 hover:bg-slate-600'}`}
-                      onClick={() => onAnswer(opt)}
+                      key={opt.value}
+                      className={`flex-1 rounded-2xl py-4 text-lg font-semibold transition ${kioskCurrentAnswer === opt.value ? 'bg-[var(--brand-600)] text-white' : 'bg-slate-700 text-slate-200 hover:bg-slate-600'}`}
+                      onClick={() => onAnswer(opt.value)}
                       type="button"
                     >
-                      {opt === 'yes' ? 'Yes' : 'No'}
+                      {opt.label}
                     </button>
                   ))}
                 </div>

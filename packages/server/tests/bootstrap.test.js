@@ -222,3 +222,31 @@ test('kiosk answer validation enforces question type and options', () => {
     recorded: true,
   })
 })
+
+test('scale and star questions can store endpoint labels', () => {
+  const institution = services.createInstitution({
+    name: 'Endpoint Label Pilot',
+    slug: 'endpoint-label-pilot',
+    timezone: 'UTC',
+  })
+
+  const scaleQuestion = services.createCustomQuestion(institution.id, {
+    questionType: 'scale',
+    prompt: 'How easy was this?',
+    options: ['Difficult', 'Easy'],
+    includeInKiosk: true,
+    isDemographic: false,
+    displayOrder: 1,
+  })
+  const starQuestion = services.createCustomQuestion(institution.id, {
+    questionType: 'star',
+    prompt: 'Rate your visit.',
+    options: ['Poor', 'Excellent'],
+    includeInKiosk: true,
+    isDemographic: false,
+    displayOrder: 2,
+  })
+
+  assert.deepEqual(scaleQuestion?.options, ['Difficult', 'Easy'])
+  assert.deepEqual(starQuestion?.options, ['Poor', 'Excellent'])
+})

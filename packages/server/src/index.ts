@@ -1254,15 +1254,6 @@ export function createApp() {
     }
 
     try {
-      if (auth.session.user.role !== 'root') {
-        const existing = getInstitution(institutionId)
-        if (!existing) {
-          return res.status(404).json({ error: 'Institution not found.' })
-        }
-        if (existing.timezone !== parsed.data.timezone) {
-          return res.status(403).json({ error: 'Root access required to change timezone.' })
-        }
-      }
       const slug = parsed.data.slug ?? parsed.data.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '')
       const institution = updateInstitution(institutionId, { ...parsed.data, slug })
       recordAuditEvent({ action: 'institution_updated', actor: auth.session.user, institutionId })

@@ -291,7 +291,7 @@ All API routes are prefixed `/api/`. Authenticated routes require an `Authorizat
 | `GET` | `/api/institutions` | Root user | List all institutions |
 | `POST` | `/api/institutions` | Root user | Create an institution |
 | `GET` | `/api/institutions/:id` | Bearer | Get institution details |
-| `PUT` | `/api/institutions/:id` | Root user | Update institution (name, slug, timezone, colorScheme) |
+| `PUT` | `/api/institutions/:id` | Root user or institution admin (own) | Update organisation settings: name, slug, timezone, theme, retention days, kiosk reset seconds, completion message, single-question mode, and QR mode |
 | `DELETE` | `/api/institutions/:id` | Root user | Delete institution (blocked if users assigned) |
 | `POST` | `/api/institutions/:id/kiosk-mode` | Root user or institution admin (own) | Enable/disable kiosk mode |
 | `POST` | `/api/institutions/:id/color-scheme` | Root user or institution admin (own) | Update institution colour theme (`ocean`, `emerald`, `sunset`, `violet`) |

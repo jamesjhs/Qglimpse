@@ -247,7 +247,7 @@ test('institution admin can inspect and update only own institution settings', a
   assert.equal(updated.body.retentionDays, 45)
   assert.equal(updated.body.kioskIdleResetSeconds, 30)
 
-  const forbiddenTimezoneChange = await api(`/api/institutions/${secondInstitutionId}`, {
+  const allowedTimezoneChange = await api(`/api/institutions/${secondInstitutionId}`, {
     method: 'PUT',
     headers: {
       Authorization: `Bearer ${westAdminToken}`,
@@ -265,8 +265,8 @@ test('institution admin can inspect and update only own institution settings', a
       kioskCompletionMessage: 'Thanks for visiting.',
     }),
   })
-  assert.equal(forbiddenTimezoneChange.response.status, 403)
-  assert.equal(forbiddenTimezoneChange.body.error, 'Root access required to change timezone.')
+  assert.equal(allowedTimezoneChange.response.status, 200)
+  assert.equal(allowedTimezoneChange.body.timezone, 'Europe/London')
 
   const forbiddenUpdate = await api('/api/institutions/1', {
     method: 'PUT',
