@@ -112,22 +112,6 @@ function initializeRuntime() {
   }
 }
 
-try {
-  initializeRuntime()
-} catch (error) {
-  writeStartupLog('error', 'Startup initialization failed.', {
-    errorName: error instanceof Error ? error.name : null,
-    errorMessage: error instanceof Error ? error.message : String(error),
-    stack: error instanceof Error ? error.stack : null,
-    cause: error instanceof Error && error.cause instanceof Error ? {
-      name: error.cause.name,
-      message: error.cause.message,
-      stack: error.cause.stack,
-    } : null,
-  })
-  throw error
-}
-
 const kioskSchema = z.object({
   enabled: z.boolean(),
 })
@@ -446,6 +430,22 @@ function writeStructuredLog(level: 'error' | 'warn' | 'info', message: string, d
 
 function logErrorSummary(message: string, details: Record<string, unknown>) {
   writeStructuredLog('error', message, details)
+}
+
+try {
+  initializeRuntime()
+} catch (error) {
+  writeStartupLog('error', 'Startup initialization failed.', {
+    errorName: error instanceof Error ? error.name : null,
+    errorMessage: error instanceof Error ? error.message : String(error),
+    stack: error instanceof Error ? error.stack : null,
+    cause: error instanceof Error && error.cause instanceof Error ? {
+      name: error.cause.name,
+      message: error.cause.message,
+      stack: error.cause.stack,
+    } : null,
+  })
+  throw error
 }
 
 function describeLoginPayload(body: unknown) {

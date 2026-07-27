@@ -53,22 +53,6 @@ function initializeRuntime() {
         ensureSeedCredentials();
     }
 }
-try {
-    initializeRuntime();
-}
-catch (error) {
-    writeStartupLog('error', 'Startup initialization failed.', {
-        errorName: error instanceof Error ? error.name : null,
-        errorMessage: error instanceof Error ? error.message : String(error),
-        stack: error instanceof Error ? error.stack : null,
-        cause: error instanceof Error && error.cause instanceof Error ? {
-            name: error.cause.name,
-            message: error.cause.message,
-            stack: error.cause.stack,
-        } : null,
-    });
-    throw error;
-}
 const kioskSchema = z.object({
     enabled: z.boolean(),
 });
@@ -337,6 +321,22 @@ function writeStructuredLog(level, message, details) {
 }
 function logErrorSummary(message, details) {
     writeStructuredLog('error', message, details);
+}
+try {
+    initializeRuntime();
+}
+catch (error) {
+    writeStartupLog('error', 'Startup initialization failed.', {
+        errorName: error instanceof Error ? error.name : null,
+        errorMessage: error instanceof Error ? error.message : String(error),
+        stack: error instanceof Error ? error.stack : null,
+        cause: error instanceof Error && error.cause instanceof Error ? {
+            name: error.cause.name,
+            message: error.cause.message,
+            stack: error.cause.stack,
+        } : null,
+    });
+    throw error;
 }
 function describeLoginPayload(body) {
     if (!body || typeof body !== 'object' || Array.isArray(body)) {
