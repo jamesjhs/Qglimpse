@@ -254,17 +254,15 @@ test('kiosk answer writes are idempotent per session and question', async () => 
     .get(session.id)
   assert.ok(assignedQuestion?.questionKey)
   const validAnswer =
-    assignedQuestion.questionType === 'single'
-      ? JSON.parse(assignedQuestion.optionsJson)[0]
-      : assignedQuestion.questionType === 'multiple'
-        ? [JSON.parse(assignedQuestion.optionsJson)[0]]
-        : assignedQuestion.questionType === 'boolean'
-          ? true
-          : assignedQuestion.questionType === 'scale'
-            ? 5
-            : assignedQuestion.questionType === 'star'
-              ? 3
-              : 'Updated feedback'
+    assignedQuestion.questionType === 'multiple'
+      ? [JSON.parse(assignedQuestion.optionsJson)[0]]
+      : assignedQuestion.questionType === 'boolean'
+        ? true
+        : assignedQuestion.questionType === 'scale'
+          ? 5
+          : assignedQuestion.questionType === 'star'
+            ? 3
+            : 'Updated feedback'
 
   const first = await api('/api/kiosk/answer', {
     method: 'POST',
@@ -316,17 +314,15 @@ test('single-use QR submission is scoped, short-lived, and replay-safe', async (
   const question = loaded.body.questions.find((item) => !item.isDemographic)
   assert.ok(question)
   const validAnswer =
-    question.questionType === 'single'
-      ? question.options[0]
-      : question.questionType === 'multiple'
-        ? [question.options[0]]
-        : question.questionType === 'boolean'
-          ? true
-          : question.questionType === 'scale'
-            ? 5
-            : question.questionType === 'star'
-              ? 3
-              : 'QR feedback'
+    question.questionType === 'multiple'
+      ? [question.options[0]]
+      : question.questionType === 'boolean'
+        ? true
+        : question.questionType === 'scale'
+          ? 5
+          : question.questionType === 'star'
+            ? 3
+            : 'QR feedback'
 
   const submitted = await api(`/api/guest/qr/${created.body.token}`, {
     method: 'POST',

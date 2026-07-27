@@ -6,7 +6,7 @@ import { demographicsTemplates, insightTemplates } from './data/demographics.js'
 
 let database: Database.Database | undefined
 const sqlitePlaintextHeader = Buffer.from('SQLite format 3\0')
-const currentSchemaVersion = 5
+const currentSchemaVersion = 6
 
 type SeedInstitution = {
   id: number
@@ -396,6 +396,20 @@ function runMigrations(db: Database.Database) {
   `)
 
   db.exec(`
+    UPDATE question_templates
+    SET question_type = 'multiple'
+    WHERE question_type = 'single';
+
+    UPDATE institution_questions
+    SET question_type = 'multiple',
+        question_version = question_version + 1,
+        updated_at = CURRENT_TIMESTAMP
+    WHERE question_type = 'single';
+
+    UPDATE kiosk_session_questions
+    SET question_type = 'multiple'
+    WHERE question_type = 'single';
+
     DELETE FROM responses
     WHERE kiosk_session_id IS NOT NULL
       AND id NOT IN (

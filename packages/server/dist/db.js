@@ -5,7 +5,7 @@ import { config } from './config.js';
 import { demographicsTemplates, insightTemplates } from './data/demographics.js';
 let database;
 const sqlitePlaintextHeader = Buffer.from('SQLite format 3\0');
-const currentSchemaVersion = 5;
+const currentSchemaVersion = 6;
 function isPlaintextSqliteDatabase(databasePath) {
     if (!existsSync(databasePath) || statSync(databasePath).size < sqlitePlaintextHeader.length) {
         return false;
@@ -368,6 +368,20 @@ function runMigrations(db) {
     WHERE audit_id IS NULL OR audit_id = '';
   `);
     db.exec(`
+    UPDATE question_templates
+    SET question_type = 'multiple'
+    WHERE question_type = 'single';
+
+    UPDATE institution_questions
+    SET question_type = 'multiple',
+        question_version = question_version + 1,
+        updated_at = CURRENT_TIMESTAMP
+    WHERE question_type = 'single';
+
+    UPDATE kiosk_session_questions
+    SET question_type = 'multiple'
+    WHERE question_type = 'single';
+
     DELETE FROM responses
     WHERE kiosk_session_id IS NOT NULL
       AND id NOT IN (

@@ -13,7 +13,7 @@ const PRECACHE_URLS = [
   "/icon-192.svg",
   "/icon-512.svg",
   "/maskable-icon.svg",
-  "/assets/index-Bcx4m376.js",
+  "/assets/index-Dk5XRoUc.js",
   "/assets/index-BUaYzc01.css"
 ];
 

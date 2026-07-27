@@ -22,7 +22,7 @@ export type SmtpSettingsInput = {
 }
 
 const parseOptions = (value: string) => JSON.parse(value) as string[]
-type QuestionType = 'single' | 'multiple' | 'text' | 'scale' | 'boolean' | 'star'
+type QuestionType = 'multiple' | 'text' | 'scale' | 'boolean' | 'star'
 const kioskSessionTtlMs = 4 * 60 * 60 * 1000
 const guestQrTokenTtlMs = 5 * 60 * 1000
 
@@ -693,8 +693,8 @@ function assertValidQuestionConfiguration(input: {
   if (input.prompt.length > 500) {
     throw new Error('Question prompt must be 500 characters or fewer.')
   }
-  if ((input.questionType === 'single' || input.questionType === 'multiple') && input.options.length < 2) {
-    throw new Error('Single and multiple choice questions require at least two options.')
+  if (input.questionType === 'multiple' && input.options.length < 2) {
+    throw new Error('Multiple choice questions require at least two options.')
   }
   if ((input.questionType === 'boolean' || input.questionType === 'scale' || input.questionType === 'star') && input.options.length > 0 && input.options.length !== 2) {
     throw new Error('Boolean, scale, and star questions may define exactly two display labels.')
@@ -1021,12 +1021,6 @@ export function startKioskSession(institutionId: number) {
 }
 
 function assertAnswerMatchesQuestion(question: KioskAssignedQuestion, answer: unknown) {
-  if (question.questionType === 'single') {
-    if (typeof answer !== 'string' || !question.options.includes(answer)) {
-      throw new Error('Answer is not valid for this question.')
-    }
-    return
-  }
   if (question.questionType === 'multiple') {
     if (
       !Array.isArray(answer) ||
@@ -1556,6 +1550,6 @@ export function buildBootstrapPayload() {
       turnstileSiteKey: config.turnstile.siteKey,
       turnstileRequired: Boolean(config.turnstile.secretKey),
     },
-    questionTypes: ['single', 'multiple', 'text', 'scale', 'boolean', 'star'],
+    questionTypes: ['multiple', 'text', 'scale', 'boolean', 'star'],
   }
 }

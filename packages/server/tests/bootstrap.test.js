@@ -73,7 +73,7 @@ test('kiosk status includes active questions payload', () => {
 test('custom questions persist scheduling fields', () => {
   const [institution] = services.listInstitutions()
   const created = services.createCustomQuestion(institution.id, {
-    questionType: 'single',
+    questionType: 'multiple',
     prompt: 'Scheduled custom question',
     options: ['A', 'B'],
     includeInKiosk: true,
@@ -140,7 +140,7 @@ test('single-question mode assigns one feedback question with optional demograph
   services.toggleInstitutionKioskMode(institution.id, true)
 
   const first = services.createCustomQuestion(institution.id, {
-    questionType: 'single',
+    questionType: 'multiple',
     prompt: 'How was check-in?',
     options: ['Poor', 'Good'],
     includeInKiosk: true,
@@ -156,7 +156,7 @@ test('single-question mode assigns one feedback question with optional demograph
     displayOrder: 2,
   })
   const demo = services.createCustomQuestion(institution.id, {
-    questionType: 'single',
+    questionType: 'multiple',
     prompt: 'Which visit type best applies?',
     options: ['New', 'Returning'],
     includeInKiosk: true,
@@ -184,8 +184,8 @@ test('single-question mode assigns one feedback question with optional demograph
     first.id,
   )
 
-  services.submitKioskAnswer(session.sessionToken, first.templateKey, JSON.stringify('Good'))
-  services.submitKioskAnswer(session.sessionToken, demo.templateKey, JSON.stringify('New'))
+  services.submitKioskAnswer(session.sessionToken, first.templateKey, JSON.stringify(['Good']))
+  services.submitKioskAnswer(session.sessionToken, demo.templateKey, JSON.stringify(['New']))
   services.completeKioskSession(session.sessionToken, {})
 
   const stored = db
@@ -204,7 +204,7 @@ test('kiosk answer validation enforces question type and options', () => {
   services.toggleInstitutionKioskMode(institution.id, true)
 
   const question = services.createCustomQuestion(institution.id, {
-    questionType: 'single',
+    questionType: 'multiple',
     prompt: 'Choose a valid option.',
     options: ['One', 'Two'],
     includeInKiosk: true,
@@ -215,10 +215,10 @@ test('kiosk answer validation enforces question type and options', () => {
 
   const session = services.startKioskSession(institution.id)
   assert.throws(
-    () => services.submitKioskAnswer(session.sessionToken, question.templateKey, JSON.stringify('Three')),
+    () => services.submitKioskAnswer(session.sessionToken, question.templateKey, JSON.stringify(['Three'])),
     /Answer is not valid/,
   )
-  assert.deepEqual(services.submitKioskAnswer(session.sessionToken, question.templateKey, JSON.stringify('One')), {
+  assert.deepEqual(services.submitKioskAnswer(session.sessionToken, question.templateKey, JSON.stringify(['One'])), {
     recorded: true,
   })
 })

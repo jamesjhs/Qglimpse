@@ -98,7 +98,7 @@ test('production database startup records schema version and does not seed live 
 
   assert.equal(result.status, 0, result.stderr)
   const output = JSON.parse(result.stdout.trim())
-  assert.deepEqual(output, { users: 0, version: 5 })
+  assert.deepEqual(output, { users: 0, version: 6 })
 })
 
 test('production database startup refuses plaintext sqlite files', () => {

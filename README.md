@@ -39,7 +39,7 @@ Required feedback model:
 
 Anonymous-only guest data categories:
 
-- Feedback answer category values, including configured single choice, multiple choice, boolean, scale, star, and short free-text answers where free text is enabled.
+- Feedback answer category values, including configured multiple choice, boolean, scale, star, and short free-text answers where free text is enabled.
 - Question metadata needed to interpret the answer, including question key, type, prompt/version, configured options, schedule assignment, and institution id.
 - Kiosk or QR session metadata needed for abuse prevention and analytics, including random session token hashes, token expiry, start/completion timestamps, submission channel, and institution id.
 - Optional demographic category answers, limited to broad, skippable categories such as age range, visit type, travel band, visit duration band, or visit purpose category.

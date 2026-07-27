@@ -105,7 +105,7 @@ Global template bank. Institution questions are cloned from here.
 |--------|------|-------|
 | `id` | INTEGER PK | |
 | `template_key` | TEXT UNIQUE | Stable identifier (e.g. `demographics.age_range`) |
-| `question_type` | TEXT | `single`, `multiple`, `text`, `scale`, `boolean`, `star` |
+| `question_type` | TEXT | `multiple`, `text`, `scale`, `boolean`, `star` |
 | `prompt` | TEXT | Question text shown to the visitor |
 | `options_json` | TEXT | JSON array of option strings |
 | `is_demographic` | INTEGER | Boolean — marks demographic questions |
@@ -195,7 +195,7 @@ Temporary records for OTP and magic-link flows. Consumed on use; expire after 15
 
 ### `schema_migrations`
 
-Records applied schema versions. Version `5` represents the current baseline schema and compatibility migrations in `packages/server/src/db.ts`.
+Records applied schema versions. Version `6` represents the current baseline schema and compatibility migrations in `packages/server/src/db.ts`.
 
 | Column | Type | Notes |
 |--------|------|-------|
@@ -238,7 +238,7 @@ Anonymous-only guest data contract:
 
 | Allowed category | Notes |
 |------------------|-------|
-| Feedback answer values | Configured single choice, multiple choice, boolean, scale, star, and short free-text answers where enabled. |
+| Feedback answer values | Configured multiple choice, boolean, scale, star, and short free-text answers where enabled. |
 | Question metadata | Question key, type, prompt/version, options, schedule assignment, and institution id needed to interpret the answer. |
 | Kiosk/QR session metadata | Random token hashes, expiry, start/completion timestamps, submission channel, and institution id. |
 | Optional demographics | Broad, skippable categories such as age range, visit type, travel band, duration band, or purpose category. |

@@ -186,7 +186,7 @@ const updateQuestionSchema = z.object({
     scheduleEndTime: z.string().regex(/^\d{2}:\d{2}$/).nullable().optional(),
 });
 const createQuestionSchema = z.object({
-    questionType: z.enum(['single', 'multiple', 'text', 'scale', 'boolean', 'star']),
+    questionType: z.enum(['multiple', 'text', 'scale', 'boolean', 'star']),
     prompt: z.string().trim().min(1),
     options: z.array(z.string()).default([]),
     includeInKiosk: z.boolean().default(true),

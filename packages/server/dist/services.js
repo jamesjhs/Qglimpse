@@ -404,8 +404,8 @@ function assertValidQuestionConfiguration(input) {
     if (input.prompt.length > 500) {
         throw new Error('Question prompt must be 500 characters or fewer.');
     }
-    if ((input.questionType === 'single' || input.questionType === 'multiple') && input.options.length < 2) {
-        throw new Error('Single and multiple choice questions require at least two options.');
+    if (input.questionType === 'multiple' && input.options.length < 2) {
+        throw new Error('Multiple choice questions require at least two options.');
     }
     if ((input.questionType === 'boolean' || input.questionType === 'scale' || input.questionType === 'star') && input.options.length > 0 && input.options.length !== 2) {
         throw new Error('Boolean, scale, and star questions may define exactly two display labels.');
@@ -650,12 +650,6 @@ export function startKioskSession(institutionId) {
     return { sessionToken, sessionId: kioskSessionId, institutionId, expiresAt, questions };
 }
 function assertAnswerMatchesQuestion(question, answer) {
-    if (question.questionType === 'single') {
-        if (typeof answer !== 'string' || !question.options.includes(answer)) {
-            throw new Error('Answer is not valid for this question.');
-        }
-        return;
-    }
     if (question.questionType === 'multiple') {
         if (!Array.isArray(answer) ||
             answer.length === 0 ||
@@ -1041,6 +1035,6 @@ export function buildBootstrapPayload() {
             turnstileSiteKey: config.turnstile.siteKey,
             turnstileRequired: Boolean(config.turnstile.secretKey),
         },
-        questionTypes: ['single', 'multiple', 'text', 'scale', 'boolean', 'star'],
+        questionTypes: ['multiple', 'text', 'scale', 'boolean', 'star'],
     };
 }

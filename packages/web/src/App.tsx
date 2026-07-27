@@ -31,7 +31,7 @@ type Question = {
   id: number
   institutionId: number
   templateKey: string | null
-  questionType: 'single' | 'multiple' | 'text' | 'scale' | 'boolean' | 'star'
+  questionType: 'multiple' | 'text' | 'scale' | 'boolean' | 'star'
   prompt: string
   options: string[]
   isActive: boolean
@@ -238,12 +238,12 @@ function defaultOptionRowsForType(questionType: Question['questionType']) {
   if (questionType === 'boolean') return ['Yes', 'No']
   if (questionType === 'scale') return ['Poor', 'Excellent']
   if (questionType === 'star') return ['Low', 'High']
-  if (questionType === 'single' || questionType === 'multiple') return ['', '']
+  if (questionType === 'multiple') return ['', '']
   return []
 }
 
 function questionNeedsListOptions(questionType: Question['questionType']) {
-  return questionType === 'single' || questionType === 'multiple'
+  return questionType === 'multiple'
 }
 
 function questionNeedsEndpointLabels(questionType: Question['questionType']) {
@@ -734,7 +734,7 @@ function App() {
   const [kioskSliderValue, setKioskSliderValue] = useState(5)
   const [kioskMultiAnswers, setKioskMultiAnswers] = useState<string[]>([])
   const [kioskDemoIdx, setKioskDemoIdx] = useState(0)
-  const [kioskDemoAnswers, setKioskDemoAnswers] = useState<Record<string, string>>({})
+  const [kioskDemoAnswers, setKioskDemoAnswers] = useState<Record<string, string | string[]>>({})
   const [kioskCountdown, setKioskCountdown] = useState(10)
   const [kioskLoading, setKioskLoading] = useState(false)
   const [kioskFeedbackMessage, setKioskFeedbackMessage] = useState('Your feedback has been recorded.')
@@ -1654,8 +1654,9 @@ function App() {
 
     const questionKey = getQuestionKey(currentDemo)
     const answer = kioskDemoAnswers[questionKey]
+    const hasAnswer = Array.isArray(answer) ? answer.length > 0 : Boolean(answer)
 
-    if (!skip && answer) {
+    if (!skip && hasAnswer) {
       const response = await fetch('/api/kiosk/answer', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -1673,12 +1674,15 @@ function App() {
     }
   }
 
-  const completeKiosk = async (demoData: Record<string, string>) => {
+  const completeKiosk = async (demoData: Record<string, string | string[]>) => {
     if (!kioskSessionToken) return
+    const demographicData = Object.fromEntries(
+      Object.entries(demoData).map(([key, value]) => [key, Array.isArray(value) ? value.join(', ') : value]),
+    )
     const response = await fetch('/api/kiosk/complete', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ sessionToken: kioskSessionToken, demographicData: demoData }),
+      body: JSON.stringify({ sessionToken: kioskSessionToken, demographicData }),
     })
     if (!response.ok) {
       throw new Error(await responseErrorMessage(response, 'Unable to complete feedback.'))
@@ -2100,7 +2104,7 @@ function App() {
                     </article>
                     <article className={statCardClass}>
                       <p className="text-sm font-medium text-slate-500">Question formats</p>
-                      <p className="mt-3 text-xl font-semibold">{(bootstrap.questionTypes ?? ['single', 'multiple', 'text', 'scale', 'boolean', 'star']).length}</p>
+                      <p className="mt-3 text-xl font-semibold">{(bootstrap.questionTypes ?? ['multiple', 'text', 'scale', 'boolean', 'star']).length}</p>
                       <p className="mt-2 text-sm text-slate-600">Configured feedback styles available for live kiosks.</p>
                     </article>
                   </section>
@@ -2549,7 +2553,7 @@ function App() {
                                 setCustomQuestionOptions(defaultOptionRowsForType(nextType))
                               }}
                             >
-                              {(bootstrap.questionTypes ?? ['text', 'single', 'multiple', 'scale', 'boolean', 'star']).map((t) => (
+                              {(bootstrap.questionTypes ?? ['text', 'multiple', 'scale', 'boolean', 'star']).map((t) => (
                                 <option key={t} value={t}>{t}</option>
                               ))}
                             </select>
@@ -2566,7 +2570,7 @@ function App() {
                         {questionNeedsListOptions(customQuestionType) ? (
                           <fieldset className="grid gap-3 rounded-xl border border-slate-200 px-4 py-3">
                             <legend className="px-1 text-sm font-semibold text-slate-900">
-                              {customQuestionType === 'single' ? 'Single-choice options' : 'Multiple-choice options'}
+                              Multiple-choice options
                             </legend>
                             <div className="grid gap-2">
                               {customQuestionOptions.map((option, index) => (
@@ -3269,18 +3273,7 @@ function GuestQuestionField({
       <h2 className="text-lg font-semibold leading-snug">{question.prompt}</h2>
       {question.isDemographic ? <p className="mt-1 text-xs text-slate-400">Optional</p> : null}
       <div className="mt-4 grid gap-3">
-        {question.questionType === 'single' ? (
-          question.options.map((option) => (
-            <button
-              key={option}
-              className={`rounded-xl px-4 py-3 text-left font-medium ${stringValue === option ? 'bg-[var(--brand-600)] text-white' : 'bg-slate-700 text-slate-100'}`}
-              onClick={() => onChange(option)}
-              type="button"
-            >
-              {option}
-            </button>
-          ))
-        ) : question.questionType === 'multiple' ? (
+        {question.questionType === 'multiple' ? (
           question.options.map((option) => (
             <button
               key={option}
@@ -3344,7 +3337,7 @@ type KioskFullScreenProps = {
   kioskSliderValue: number
   kioskMultiAnswers: string[]
   kioskDemoIdx: number
-  kioskDemoAnswers: Record<string, string>
+  kioskDemoAnswers: Record<string, string | string[]>
   kioskCountdown: number
   kioskFeedbackMessage: string
   kioskQrImage: string
@@ -3358,7 +3351,7 @@ type KioskFullScreenProps = {
   onSliderChange: (val: number) => void
   onMultiToggle: (opt: string) => void
   onSubmitAnswer: () => void
-  onDemoAnswer: (key: string, val: string) => void
+  onDemoAnswer: (key: string, val: string | string[]) => void
   onComplete: () => void
   onDemoSkip: () => void
   onDemoNext: () => void
@@ -3380,6 +3373,8 @@ function KioskFullScreen(props: KioskFullScreenProps) {
   const currentQuestion = promptQuestions[kioskCurrentIdx] ?? null
   const demoQuestions = kioskQuestions.filter((q) => q.isDemographic)
   const currentDemoQ = demoQuestions[kioskDemoIdx] ?? null
+  const currentDemoKey = currentDemoQ ? getQuestionKey(currentDemoQ) : ''
+  const currentDemoAnswer = currentDemoKey ? kioskDemoAnswers[currentDemoKey] : undefined
 
   return (
     <div className="relative flex min-h-screen flex-col items-center justify-center bg-[var(--brand-900)] px-4 py-6 text-white sm:px-6" style={institutionColorSchemes[colorScheme].style as CSSProperties}>
@@ -3510,19 +3505,6 @@ function KioskFullScreen(props: KioskFullScreenProps) {
                     </button>
                   ))}
                 </div>
-              ) : currentQuestion.questionType === 'single' ? (
-                <div className="flex flex-col gap-3">
-                  {currentQuestion.options.map((opt) => (
-                    <button
-                      key={opt}
-                      className={`rounded-2xl px-5 py-3 text-left font-medium transition ${kioskCurrentAnswer === opt ? 'bg-[var(--brand-600)] text-white' : 'bg-slate-700 text-slate-200 hover:bg-slate-600'}`}
-                      onClick={() => onAnswer(opt)}
-                      type="button"
-                    >
-                      {opt}
-                    </button>
-                  ))}
-                </div>
               ) : (
                 <textarea
                   className="w-full rounded-2xl bg-slate-700 px-4 py-3 text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-[var(--brand-500)]"
@@ -3552,13 +3534,24 @@ function KioskFullScreen(props: KioskFullScreenProps) {
           <div className="rounded-xl bg-slate-800 px-4 py-5 sm:px-8 sm:py-8">
             <h2 className="text-xl font-semibold leading-snug sm:text-2xl">{currentDemoQ.prompt}</h2>
             <div className="mt-6">
-              {currentDemoQ.questionType === 'single' || currentDemoQ.options.length > 0 ? (
+              {currentDemoQ.options.length > 0 ? (
                 <div className="flex flex-col gap-3">
                   {currentDemoQ.options.map((opt) => (
                     <button
                       key={opt}
-                       className={`rounded-2xl px-5 py-3 text-left font-medium transition ${kioskDemoAnswers[currentDemoQ.templateKey ?? `iq-${currentDemoQ.id}`] === opt ? 'bg-[var(--brand-600)] text-white' : 'bg-slate-700 text-slate-200 hover:bg-slate-600'}`}
-                      onClick={() => onDemoAnswer(currentDemoQ.templateKey ?? `iq-${currentDemoQ.id}`, opt)}
+                      className={`rounded-2xl px-5 py-3 text-left font-medium transition ${
+                        (Array.isArray(currentDemoAnswer) ? currentDemoAnswer.includes(opt) : currentDemoAnswer === opt)
+                          ? 'bg-[var(--brand-600)] text-white'
+                          : 'bg-slate-700 text-slate-200 hover:bg-slate-600'
+                      }`}
+                      onClick={() => {
+                        if (currentDemoQ.questionType === 'multiple') {
+                          const selected = Array.isArray(currentDemoAnswer) ? currentDemoAnswer : []
+                          onDemoAnswer(currentDemoKey, selected.includes(opt) ? selected.filter((item) => item !== opt) : [...selected, opt])
+                        } else {
+                          onDemoAnswer(currentDemoKey, opt)
+                        }
+                      }}
                       type="button"
                     >
                       {opt}
@@ -3569,8 +3562,8 @@ function KioskFullScreen(props: KioskFullScreenProps) {
                 <input
                   className="w-full rounded-2xl bg-slate-700 px-4 py-3 text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-[var(--brand-500)]"
                   placeholder="Your answer"
-                  value={kioskDemoAnswers[currentDemoQ.templateKey ?? `iq-${currentDemoQ.id}`] ?? ''}
-                  onChange={(event) => onDemoAnswer(currentDemoQ.templateKey ?? `iq-${currentDemoQ.id}`, event.target.value)}
+                  value={typeof currentDemoAnswer === 'string' ? currentDemoAnswer : ''}
+                  onChange={(event) => onDemoAnswer(currentDemoKey, event.target.value)}
                 />
               )}
             </div>

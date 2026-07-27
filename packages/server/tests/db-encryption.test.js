@@ -79,7 +79,7 @@ test('database startup applies encryption key for all application queries', () =
     const institution = keyed.prepare('SELECT slug FROM institutions ORDER BY id LIMIT 1').get()
     assert.equal(institution.slug, 'downtown-clinic')
     const migration = keyed.prepare('SELECT version FROM schema_migrations ORDER BY version DESC LIMIT 1').get()
-    assert.equal(migration.version, 5)
+    assert.equal(migration.version, 6)
   } finally {
     keyed.close()
   }
