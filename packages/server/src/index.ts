@@ -1640,6 +1640,14 @@ function isDirectRun() {
   return getRealPath(process.argv[1]) === getRealPath(fileURLToPath(import.meta.url))
 }
 
+function isPm2Run() {
+  const pmExecPath = process.env.pm_exec_path
+  if (!pmExecPath) {
+    return false
+  }
+  return getRealPath(pmExecPath) === getRealPath(fileURLToPath(import.meta.url))
+}
+
 function parseAdminInitArgs(argv: string[]) {
   const npmEmail = process.env.npm_config_email
   const npmPassword = process.env.npm_config_password
@@ -1733,7 +1741,7 @@ function startHttpServer() {
   return server
 }
 
-if (isDirectRun()) {
+if (isDirectRun() || isPm2Run()) {
   if (process.argv[2] === 'init-admin') {
     try {
       const options = parseAdminInitArgs(process.argv.slice(3))
@@ -1783,5 +1791,6 @@ if (isDirectRun()) {
   writeStartupLog('warn', 'Server module imported without starting HTTP listener.', {
     argv: process.argv,
     modulePath: fileURLToPath(import.meta.url),
+    pmExecPath: process.env.pm_exec_path ?? null,
   })
 }
