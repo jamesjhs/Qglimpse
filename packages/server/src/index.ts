@@ -42,6 +42,7 @@ import {
   getInstitutionQuestions,
   getCrossTabulation,
   getKioskStatus,
+  getGuestQrSubmission,
   getRootOverview,
   getSmtpSettings,
   listInstitutions,
@@ -52,8 +53,10 @@ import {
   runRetentionCleanup,
   sendTestSmtpEmail,
   setInstitutionColorScheme,
+  createGuestQrToken,
   startKioskSession,
   submitKioskAnswer,
+  submitGuestQrSubmission,
   completeKioskSession,
   toggleInstitutionKioskMode,
   updateInstitution,
@@ -298,6 +301,19 @@ const demographicKeySchema = z
 
 const kioskCompleteSchema = z.object({
   sessionToken: z.string().min(1),
+  demographicData: z.record(demographicKeySchema, z.string().trim().max(256)).default({}),
+})
+
+const guestQrSubmitSchema = z.object({
+  answers: z
+    .array(
+      z.object({
+        questionKey: z.string().min(1),
+        answer: z.unknown(),
+      }),
+    )
+    .min(1)
+    .max(20),
   demographicData: z.record(demographicKeySchema, z.string().trim().max(256)).default({}),
 })
 
@@ -1521,9 +1537,37 @@ export function createApp() {
     }
     try {
       const session = startKioskSession(status.institutionId)
-      return res.status(201).json(session)
+      return res.status(201).json({
+        sessionToken: session.sessionToken,
+        institutionId: session.institutionId,
+        expiresAt: session.expiresAt,
+        questions: session.questions,
+      })
     } catch (error) {
       return res.status(403).json({ error: error instanceof Error ? error.message : 'Unable to start kiosk session.' })
+    }
+  })
+
+  app.post('/api/kiosk/:slug/qr-token', kioskRuntimeLimiter, (req, res) => {
+    const auth = getAuthenticatedSession(req, res)
+    if (!auth) return
+    if (auth.session.user.role !== 'institution_kiosk') {
+      return res.status(403).json({ error: 'Kiosk account required.' })
+    }
+    const slug = Array.isArray(req.params.slug) ? req.params.slug[0] : req.params.slug
+    if (!slug) return res.status(400).json({ error: 'Invalid slug.' })
+    const status = getKioskStatus(slug)
+    if (!status) return res.status(404).json({ error: 'Institution not found.' })
+    if (auth.session.user.institutionId !== status.institutionId) {
+      return res.status(403).json({ error: 'Institution-scoped access required.' })
+    }
+    try {
+      const token = createGuestQrToken(status.institutionId)
+      return res.status(201).json(token)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unable to create QR token.'
+      const statusCode = /not available|not enabled|No active|Single-question|not active/i.test(message) ? 403 : 400
+      return res.status(statusCode).json({ error: message })
     }
   })
 
@@ -1542,10 +1586,31 @@ export function createApp() {
     const parsed = kioskCompleteSchema.safeParse(req.body)
     if (!parsed.success) return res.status(400).json({ error: 'Invalid complete payload.' })
     try {
-      completeKioskSession(parsed.data.sessionToken, parsed.data.demographicData as Record<string, string>)
-      return res.json({ completed: true })
+      return res.json(completeKioskSession(parsed.data.sessionToken, parsed.data.demographicData as Record<string, string>))
     } catch (error) {
       return res.status(400).json({ error: error instanceof Error ? error.message : 'Unable to complete session.' })
+    }
+  })
+
+  app.get('/api/guest/qr/:token', kioskRuntimeLimiter, (req, res) => {
+    const token = Array.isArray(req.params.token) ? req.params.token[0] : req.params.token
+    if (!token) return res.status(400).json({ error: 'Missing QR token.' })
+    try {
+      return res.json(getGuestQrSubmission(token))
+    } catch (error) {
+      return res.status(410).json({ error: error instanceof Error ? error.message : 'QR link is unavailable.' })
+    }
+  })
+
+  app.post('/api/guest/qr/:token', kioskRuntimeLimiter, (req, res) => {
+    const token = Array.isArray(req.params.token) ? req.params.token[0] : req.params.token
+    if (!token) return res.status(400).json({ error: 'Missing QR token.' })
+    const parsed = guestQrSubmitSchema.safeParse(req.body)
+    if (!parsed.success) return res.status(400).json({ error: 'Invalid QR submission payload.' })
+    try {
+      return res.json(submitGuestQrSubmission(token, parsed.data.answers, parsed.data.demographicData as Record<string, string>))
+    } catch (error) {
+      return res.status(400).json({ error: error instanceof Error ? error.message : 'Unable to submit QR feedback.' })
     }
   })
 

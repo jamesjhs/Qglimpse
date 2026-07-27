@@ -1,17 +1,25 @@
 {
-  "id": "/?source=pwa",
+  "id": "/kiosk?source=pwa",
   "name": "Qglimpse",
   "short_name": "Qglimpse",
-  "description": "Institution-friendly visitor insight kiosk and dashboard shell.",
+  "description": "Institution-friendly visitor feedback kiosk for tablets.",
   "categories": ["business", "productivity", "utilities"],
   "lang": "en-GB",
   "theme_color": "#0f172a",
   "background_color": "#f8fafc",
-  "display": "standalone",
-  "display_override": ["standalone", "minimal-ui"],
+  "display": "fullscreen",
+  "display_override": ["fullscreen", "standalone", "minimal-ui"],
   "orientation": "any",
   "scope": "/",
-  "start_url": "/?source=pwa",
+  "start_url": "/kiosk?source=pwa",
+  "shortcuts": [
+    {
+      "name": "Open kiosk",
+      "short_name": "Kiosk",
+      "url": "/kiosk?source=shortcut",
+      "icons": [{ "src": "/icon-192.png", "sizes": "192x192", "type": "image/png" }]
+    }
+  ],
   "prefer_related_applications": false,
   "icons": [
     {

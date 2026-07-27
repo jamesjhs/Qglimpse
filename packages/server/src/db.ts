@@ -6,7 +6,7 @@ import { demographicsTemplates, insightTemplates } from './data/demographics.js'
 
 let database: Database.Database | undefined
 const sqlitePlaintextHeader = Buffer.from('SQLite format 3\0')
-const currentSchemaVersion = 4
+const currentSchemaVersion = 5
 
 type SeedInstitution = {
   id: number
@@ -206,9 +206,22 @@ function runMigrations(db: Database.Database) {
       institution_id INTEGER NOT NULL,
       session_token TEXT NOT NULL UNIQUE,
       demographic_data TEXT NOT NULL DEFAULT '{}',
+      expires_at TEXT,
       started_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
       completed_at TEXT,
       FOREIGN KEY (institution_id) REFERENCES institutions(id) ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS guest_qr_tokens (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      institution_id INTEGER NOT NULL,
+      kiosk_session_id INTEGER NOT NULL,
+      token_hash TEXT NOT NULL UNIQUE,
+      expires_at TEXT NOT NULL,
+      consumed_at TEXT,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (institution_id) REFERENCES institutions(id) ON DELETE CASCADE,
+      FOREIGN KEY (kiosk_session_id) REFERENCES kiosk_sessions(id) ON DELETE CASCADE
     );
 
     CREATE TABLE IF NOT EXISTS kiosk_session_questions (
@@ -259,6 +272,19 @@ function runMigrations(db: Database.Database) {
       UPDATE auth_sessions
       SET last_seen_at = COALESCE(created_at, CURRENT_TIMESTAMP)
       WHERE last_seen_at IS NULL;
+    `)
+  }
+
+  const kioskSessionColumns = db
+    .prepare(`PRAGMA table_info(kiosk_sessions)`)
+    .all() as Array<{ name: string }>
+  const kioskSessionColNames = new Set(kioskSessionColumns.map((c) => c.name))
+  if (!kioskSessionColNames.has('expires_at')) {
+    db.exec(`
+      ALTER TABLE kiosk_sessions ADD COLUMN expires_at TEXT;
+      UPDATE kiosk_sessions
+      SET expires_at = datetime(COALESCE(started_at, CURRENT_TIMESTAMP), '+4 hours')
+      WHERE expires_at IS NULL;
     `)
   }
 
@@ -385,6 +411,12 @@ function runMigrations(db: Database.Database) {
 
     CREATE INDEX IF NOT EXISTS idx_kiosk_session_questions_session
       ON kiosk_session_questions (kiosk_session_id, display_order, id);
+
+    CREATE INDEX IF NOT EXISTS idx_kiosk_sessions_active
+      ON kiosk_sessions (session_token, completed_at, expires_at);
+
+    CREATE INDEX IF NOT EXISTS idx_guest_qr_tokens_active
+      ON guest_qr_tokens (token_hash, consumed_at, expires_at);
 
     CREATE INDEX IF NOT EXISTS idx_login_challenges_email_method_active
       ON login_challenges (email, method, consumed_at, expires_at, created_at);

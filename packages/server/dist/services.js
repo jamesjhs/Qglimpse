@@ -6,6 +6,28 @@ import { sendOperationalEmail } from './mailer.js';
 import { recordAuditEvent } from './audit.js';
 import { registerUser, userStatuses, } from './auth.js';
 const parseOptions = (value) => JSON.parse(value);
+const kioskSessionTtlMs = 4 * 60 * 60 * 1000;
+const guestQrTokenTtlMs = 5 * 60 * 1000;
+function hashGuestQrToken(token) {
+    return createHash('sha256').update(token).digest('hex');
+}
+function kioskSessionExpiresAt() {
+    return new Date(Date.now() + kioskSessionTtlMs).toISOString();
+}
+function guestQrTokenExpiresAt() {
+    return new Date(Date.now() + guestQrTokenTtlMs).toISOString();
+}
+function mapAssignedQuestion(row) {
+    return {
+        id: row.id,
+        questionKey: row.questionKey,
+        questionVersion: row.questionVersion,
+        questionType: row.questionType,
+        prompt: row.prompt,
+        options: parseOptions(row.optionsJson),
+        isDemographic: Boolean(row.isDemographic),
+    };
+}
 const institutionSelectColumns = `
   id, name, slug, timezone, status,
   kiosk_mode_enabled AS kioskModeEnabled,
@@ -564,6 +586,7 @@ export function getKioskStatus(institutionSlug) {
     const db = getDb();
     const row = db
         .prepare(`SELECT id, name, slug, timezone, status, kiosk_mode_enabled AS kioskModeEnabled,
+              qr_mode_enabled AS qrModeEnabled,
               color_scheme AS colorScheme, kiosk_idle_reset_seconds AS kioskIdleResetSeconds,
               kiosk_completion_message AS kioskCompletionMessage
        FROM institutions WHERE slug = ?`)
@@ -577,6 +600,7 @@ export function getKioskStatus(institutionSlug) {
         name: row.name,
         timezone: row.timezone,
         colorScheme: row.colorScheme,
+        qrModeEnabled: Boolean(row.qrModeEnabled),
         kioskIdleResetSeconds: row.kioskIdleResetSeconds,
         kioskCompletionMessage: row.kioskCompletionMessage,
         questions: getActiveKioskQuestions(row.id),
@@ -607,9 +631,11 @@ export function startKioskSession(institutionId) {
         throw new Error('Single-question mode requires exactly one active feedback question.');
     }
     const sessionToken = randomBytes(32).toString('base64url');
+    const expiresAt = kioskSessionExpiresAt();
+    let kioskSessionId = 0;
     db.transaction(() => {
-        const sessionResult = db.prepare(`INSERT INTO kiosk_sessions (institution_id, session_token) VALUES (?, ?)`).run(institutionId, sessionToken);
-        const kioskSessionId = Number(sessionResult.lastInsertRowid);
+        const sessionResult = db.prepare(`INSERT INTO kiosk_sessions (institution_id, session_token, expires_at) VALUES (?, ?, ?)`).run(institutionId, sessionToken, expiresAt);
+        kioskSessionId = Number(sessionResult.lastInsertRowid);
         const insertQuestion = db.prepare(`INSERT INTO kiosk_session_questions
          (kiosk_session_id, institution_question_id, question_key, question_version,
           question_type, prompt, options_json, is_demographic, display_order)
@@ -618,7 +644,7 @@ export function startKioskSession(institutionId) {
             insertQuestion.run(kioskSessionId, question.id, questionKey(question), question.questionVersion, question.questionType, question.prompt, JSON.stringify(question.options), question.isDemographic ? 1 : 0, question.displayOrder);
         }
     })();
-    return { sessionToken, institutionId, questions };
+    return { sessionToken, sessionId: kioskSessionId, institutionId, expiresAt, questions };
 }
 function assertAnswerMatchesQuestion(question, answer) {
     if (question.questionType === 'single') {
@@ -661,11 +687,17 @@ export function submitKioskAnswer(sessionToken, submittedQuestionKey, answerJson
     const db = getDb();
     return db.transaction(() => {
         const session = db
-            .prepare(`SELECT id, institution_id AS institutionId FROM kiosk_sessions
-         WHERE session_token = ? AND completed_at IS NULL`)
+            .prepare(`SELECT ks.id, ks.institution_id AS institutionId
+         FROM kiosk_sessions ks
+         JOIN institutions i ON i.id = ks.institution_id
+         WHERE ks.session_token = ?
+           AND ks.completed_at IS NULL
+           AND datetime(ks.expires_at) > datetime('now')
+           AND i.status = 'active'
+           AND i.kiosk_mode_enabled = 1`)
             .get(sessionToken);
         if (!session) {
-            throw new Error('Invalid or completed session.');
+            throw new Error('Invalid, expired, unavailable, or completed session.');
         }
         const assignedQuestion = db
             .prepare(`SELECT id, question_key AS questionKey, question_version AS questionVersion,
@@ -677,40 +709,42 @@ export function submitKioskAnswer(sessionToken, submittedQuestionKey, answerJson
         if (!assignedQuestion) {
             throw new Error('Question is not assigned to this kiosk session.');
         }
-        const answer = JSON.parse(answerJson);
-        const questionSnapshot = {
-            id: assignedQuestion.id,
-            questionKey: assignedQuestion.questionKey,
-            questionVersion: assignedQuestion.questionVersion,
-            questionType: assignedQuestion.questionType,
-            prompt: assignedQuestion.prompt,
-            options: parseOptions(assignedQuestion.optionsJson),
-            isDemographic: Boolean(assignedQuestion.isDemographic),
-        };
-        assertAnswerMatchesQuestion(questionSnapshot, answer);
-        db.prepare(`INSERT INTO responses
-         (institution_id, question_key, question_prompt, question_type, question_options_json,
-          question_version, is_demographic, answer_json, kiosk_session_id)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-       ON CONFLICT(kiosk_session_id, question_key) WHERE kiosk_session_id IS NOT NULL
-       DO UPDATE SET
-         answer_json = excluded.answer_json,
-         question_prompt = excluded.question_prompt,
-         question_type = excluded.question_type,
-         question_options_json = excluded.question_options_json,
-         question_version = excluded.question_version,
-         is_demographic = excluded.is_demographic,
-         created_at = CURRENT_TIMESTAMP`).run(session.institutionId, questionSnapshot.questionKey, questionSnapshot.prompt, questionSnapshot.questionType, JSON.stringify(questionSnapshot.options), questionSnapshot.questionVersion, questionSnapshot.isDemographic ? 1 : 0, answerJson, session.id);
+        const questionSnapshot = mapAssignedQuestion(assignedQuestion);
+        recordKioskResponse(session.id, session.institutionId, questionSnapshot, JSON.parse(answerJson));
         return { recorded: true };
     })();
+}
+function recordKioskResponse(kioskSessionId, institutionId, questionSnapshot, answer) {
+    const db = getDb();
+    assertAnswerMatchesQuestion(questionSnapshot, answer);
+    db.prepare(`INSERT INTO responses
+       (institution_id, question_key, question_prompt, question_type, question_options_json,
+        question_version, is_demographic, answer_json, kiosk_session_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(kiosk_session_id, question_key) WHERE kiosk_session_id IS NOT NULL
+     DO UPDATE SET
+       answer_json = excluded.answer_json,
+       question_prompt = excluded.question_prompt,
+       question_type = excluded.question_type,
+       question_options_json = excluded.question_options_json,
+       question_version = excluded.question_version,
+       is_demographic = excluded.is_demographic,
+       created_at = CURRENT_TIMESTAMP`).run(institutionId, questionSnapshot.questionKey, questionSnapshot.prompt, questionSnapshot.questionType, JSON.stringify(questionSnapshot.options), questionSnapshot.questionVersion, questionSnapshot.isDemographic ? 1 : 0, JSON.stringify(answer), kioskSessionId);
 }
 export function completeKioskSession(sessionToken, demographicData) {
     const db = getDb();
     const session = db
-        .prepare(`SELECT id FROM kiosk_sessions WHERE session_token = ? AND completed_at IS NULL`)
+        .prepare(`SELECT ks.id, i.kiosk_completion_message AS kioskCompletionMessage
+       FROM kiosk_sessions ks
+       JOIN institutions i ON i.id = ks.institution_id
+       WHERE ks.session_token = ?
+         AND ks.completed_at IS NULL
+         AND datetime(ks.expires_at) > datetime('now')
+         AND i.status = 'active'
+         AND i.kiosk_mode_enabled = 1`)
         .get(sessionToken);
     if (!session) {
-        throw new Error('Invalid or already completed session.');
+        throw new Error('Invalid, expired, unavailable, or already completed session.');
     }
     const sanitizedDemographics = Object.create(null);
     for (const [key, value] of Object.entries(demographicData)) {
@@ -720,7 +754,139 @@ export function completeKioskSession(sessionToken, demographicData) {
         sanitizedDemographics[key] = value;
     }
     db.prepare(`UPDATE kiosk_sessions SET demographic_data = ?, completed_at = CURRENT_TIMESTAMP WHERE id = ?`).run(JSON.stringify(sanitizedDemographics), session.id);
-    return { completed: true };
+    return { completed: true, feedbackMessage: session.kioskCompletionMessage };
+}
+function getGuestQrAssignedQuestions(kioskSessionId) {
+    const db = getDb();
+    const rows = db
+        .prepare(`SELECT id, question_key AS questionKey, question_version AS questionVersion,
+              question_type AS questionType, prompt, options_json AS optionsJson,
+              is_demographic AS isDemographic
+       FROM kiosk_session_questions
+       WHERE kiosk_session_id = ?
+       ORDER BY is_demographic, display_order, id`)
+        .all(kioskSessionId);
+    return rows.map(mapAssignedQuestion);
+}
+export function createGuestQrToken(institutionId) {
+    const db = getDb();
+    const institution = db
+        .prepare(`SELECT id, slug, status, qr_mode_enabled AS qrModeEnabled, kiosk_completion_message AS kioskCompletionMessage
+       FROM institutions
+       WHERE id = ?`)
+        .get(institutionId);
+    if (!institution) {
+        throw new Error('Institution not found.');
+    }
+    if (institution.status !== 'active' || !institution.qrModeEnabled) {
+        throw new Error('QR submission is not available for this institution.');
+    }
+    const kioskSession = startKioskSession(institutionId);
+    const token = randomBytes(24).toString('base64url');
+    const expiresAt = guestQrTokenExpiresAt();
+    db.prepare(`INSERT INTO guest_qr_tokens (institution_id, kiosk_session_id, token_hash, expires_at)
+     VALUES (?, ?, ?, ?)`).run(institutionId, kioskSession.sessionId, hashGuestQrToken(token), expiresAt);
+    return {
+        token,
+        url: `${config.baseUrl}/guest/qr/${encodeURIComponent(token)}`,
+        expiresAt,
+        institutionId,
+        questions: kioskSession.questions,
+    };
+}
+export function getGuestQrSubmission(token) {
+    const db = getDb();
+    const row = db
+        .prepare(`SELECT q.institution_id AS institutionId,
+              q.kiosk_session_id AS kioskSessionId,
+              q.expires_at AS expiresAt,
+              i.name,
+              i.slug,
+              i.color_scheme AS colorScheme,
+              i.kiosk_completion_message AS kioskCompletionMessage
+       FROM guest_qr_tokens q
+       JOIN institutions i ON i.id = q.institution_id
+       JOIN kiosk_sessions ks ON ks.id = q.kiosk_session_id
+       WHERE q.token_hash = ?
+         AND q.consumed_at IS NULL
+         AND datetime(q.expires_at) > datetime('now')
+         AND ks.completed_at IS NULL
+         AND datetime(ks.expires_at) > datetime('now')
+         AND i.status = 'active'
+         AND i.kiosk_mode_enabled = 1
+         AND i.qr_mode_enabled = 1`)
+        .get(hashGuestQrToken(token));
+    if (!row) {
+        throw new Error('QR link is invalid, expired, already used, or unavailable.');
+    }
+    return {
+        institution: {
+            id: row.institutionId,
+            name: row.name,
+            slug: row.slug,
+            colorScheme: row.colorScheme,
+            kioskCompletionMessage: row.kioskCompletionMessage,
+        },
+        expiresAt: row.expiresAt,
+        questions: getGuestQrAssignedQuestions(row.kioskSessionId),
+    };
+}
+export function submitGuestQrSubmission(token, answers, demographicData) {
+    const db = getDb();
+    return db.transaction(() => {
+        const row = db
+            .prepare(`SELECT q.id AS qrTokenId,
+                q.institution_id AS institutionId,
+                q.kiosk_session_id AS kioskSessionId,
+                i.kiosk_completion_message AS kioskCompletionMessage
+         FROM guest_qr_tokens q
+         JOIN institutions i ON i.id = q.institution_id
+         JOIN kiosk_sessions ks ON ks.id = q.kiosk_session_id
+         WHERE q.token_hash = ?
+           AND q.consumed_at IS NULL
+           AND datetime(q.expires_at) > datetime('now')
+           AND ks.completed_at IS NULL
+           AND datetime(ks.expires_at) > datetime('now')
+           AND i.status = 'active'
+           AND i.kiosk_mode_enabled = 1
+           AND i.qr_mode_enabled = 1`)
+            .get(hashGuestQrToken(token));
+        if (!row) {
+            throw new Error('QR link is invalid, expired, already used, or unavailable.');
+        }
+        const assignedQuestions = getGuestQrAssignedQuestions(row.kioskSessionId);
+        const assignedByKey = new Map(assignedQuestions.map((question) => [question.questionKey, question]));
+        const promptQuestions = assignedQuestions.filter((question) => !question.isDemographic);
+        const submittedKeys = new Set();
+        for (const submitted of answers) {
+            const question = assignedByKey.get(submitted.questionKey);
+            if (!question) {
+                throw new Error('Question is not assigned to this QR session.');
+            }
+            if (submittedKeys.has(submitted.questionKey)) {
+                throw new Error('Duplicate answer for this question.');
+            }
+            submittedKeys.add(submitted.questionKey);
+            recordKioskResponse(row.kioskSessionId, row.institutionId, question, submitted.answer);
+        }
+        if (!promptQuestions.some((question) => submittedKeys.has(question.questionKey))) {
+            throw new Error('At least one active feedback answer is required.');
+        }
+        const sanitizedDemographics = Object.create(null);
+        for (const [key, value] of Object.entries(demographicData)) {
+            if (key === '__proto__' || key === 'prototype' || key === 'constructor') {
+                continue;
+            }
+            sanitizedDemographics[key] = value;
+        }
+        db.prepare(`UPDATE kiosk_sessions
+       SET demographic_data = ?, completed_at = CURRENT_TIMESTAMP
+       WHERE id = ? AND completed_at IS NULL`).run(JSON.stringify(sanitizedDemographics), row.kioskSessionId);
+        db.prepare(`UPDATE guest_qr_tokens
+       SET consumed_at = CURRENT_TIMESTAMP
+       WHERE id = ? AND consumed_at IS NULL`).run(row.qrTokenId);
+        return { completed: true, feedbackMessage: row.kioskCompletionMessage };
+    })();
 }
 export function runRetentionCleanup(retentionDays = 90) {
     if (!Number.isInteger(retentionDays) || retentionDays < 1 || retentionDays > 90) {
@@ -735,6 +901,12 @@ export function runRetentionCleanup(retentionDays = 90) {
         const kioskSessions = db
             .prepare(`DELETE FROM kiosk_sessions WHERE datetime(started_at) < datetime('now', ?)`)
             .run(cutoffModifier).changes;
+        const guestQrTokens = db
+            .prepare(`DELETE FROM guest_qr_tokens
+         WHERE consumed_at IS NOT NULL
+            OR datetime(expires_at) < datetime('now')
+            OR datetime(created_at) < datetime('now', ?)`)
+            .run(cutoffModifier).changes;
         const loginChallenges = db
             .prepare(`DELETE FROM login_challenges
          WHERE consumed_at IS NOT NULL
@@ -745,6 +917,7 @@ export function runRetentionCleanup(retentionDays = 90) {
             retentionDays,
             responses,
             kioskSessions,
+            guestQrTokens,
             loginChallenges,
         };
     })();

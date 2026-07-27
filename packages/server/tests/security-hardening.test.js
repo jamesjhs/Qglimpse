@@ -300,15 +300,64 @@ test('creating a challenge invalidates prior active challenge of same method', a
   assert.equal(active.count, 1)
 })
 
-test('QR API routes fail closed until single-use QR submission is implemented', async () => {
-  const qrAttempt = await api('/api/guest/qr/reused-token', {
+test('single-use QR submission is scoped, short-lived, and replay-safe', async () => {
+  db.prepare('UPDATE institutions SET qr_mode_enabled = 1 WHERE id = 1').run()
+  const kioskToken = await login('kiosk-security@example.com', 'Password1234!')
+  const created = await api('/api/kiosk/downtown-clinic/qr-token', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${kioskToken}` },
+  })
+  assert.equal(created.response.status, 201)
+  assert.match(created.body.url, /\/guest\/qr\//)
+
+  const loaded = await api(`/api/guest/qr/${created.body.token}`)
+  assert.equal(loaded.response.status, 200)
+  assert.equal(loaded.body.institution.id, 1)
+  const question = loaded.body.questions.find((item) => !item.isDemographic)
+  assert.ok(question)
+  const validAnswer =
+    question.questionType === 'single'
+      ? question.options[0]
+      : question.questionType === 'multiple'
+        ? [question.options[0]]
+        : question.questionType === 'boolean'
+          ? true
+          : question.questionType === 'scale'
+            ? 5
+            : question.questionType === 'star'
+              ? 3
+              : 'QR feedback'
+
+  const submitted = await api(`/api/guest/qr/${created.body.token}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ answer: 'attempted replay' }),
+    body: JSON.stringify({ answers: [{ questionKey: question.questionKey, answer: validAnswer }] }),
   })
+  assert.equal(submitted.response.status, 200)
+  assert.equal(submitted.body.completed, true)
+  assert.equal(typeof submitted.body.feedbackMessage, 'string')
 
-  assert.equal(qrAttempt.response.status, 404)
-  assert.deepEqual(qrAttempt.body, { error: 'API route not found.' })
+  const replay = await api(`/api/guest/qr/${created.body.token}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ answers: [{ questionKey: question.questionKey, answer: validAnswer }] }),
+  })
+  assert.equal(replay.response.status, 400)
+
+  const forged = await api('/api/guest/qr/forged-token')
+  assert.equal(forged.response.status, 410)
+
+  const expiredToken = services.createGuestQrToken(1)
+  db.prepare("UPDATE guest_qr_tokens SET expires_at = datetime('now', '-1 minute')").run()
+  const expired = await api(`/api/guest/qr/${expiredToken.token}`)
+  assert.equal(expired.response.status, 410)
+
+  db.prepare('UPDATE institutions SET qr_mode_enabled = 0 WHERE id = 1').run()
+  const disabledCreate = await api('/api/kiosk/downtown-clinic/qr-token', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${kioskToken}` },
+  })
+  assert.equal(disabledCreate.response.status, 403)
 })
 
 test('export route enforces institution scope before returning not implemented', async () => {
@@ -341,11 +390,22 @@ test('retention cleanup removes raw feedback, sessions, and expired challenges',
     `INSERT INTO login_challenges (email, method, otp_code_hash, expires_at, created_at)
      VALUES (?, ?, ?, datetime('now', '-1 day'), datetime('now', '-2 days'))`,
   ).run('expired-challenge@example.com', 'email_code', 'hash')
+  const qrOnlySession = db
+    .prepare(
+      `INSERT INTO kiosk_sessions (institution_id, session_token, started_at, expires_at)
+       VALUES (?, ?, datetime('now'), datetime('now', '+1 hour'))`,
+    )
+    .run(1, 'qr-retention-session')
+  db.prepare(
+    `INSERT INTO guest_qr_tokens (institution_id, kiosk_session_id, token_hash, expires_at, created_at)
+     VALUES (?, ?, ?, datetime('now', '-1 day'), datetime('now', '-2 days'))`,
+  ).run(1, Number(qrOnlySession.lastInsertRowid), 'old-qr-token-hash')
 
   const result = services.runRetentionCleanup()
 
   assert.ok(result.responses >= 1)
   assert.ok(result.kioskSessions >= 1)
+  assert.ok(result.guestQrTokens >= 1)
   assert.ok(result.loginChallenges >= 1)
   assert.equal(db.prepare("SELECT COUNT(*) AS count FROM responses WHERE question_key = 'retention-check'").get().count, 0)
   assert.equal(db.prepare("SELECT COUNT(*) AS count FROM kiosk_sessions WHERE session_token = 'old-retention-session'").get().count, 0)

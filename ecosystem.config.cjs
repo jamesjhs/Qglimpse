@@ -1,7 +1,7 @@
 module.exports = {
   apps: [
     {
-      name: 'quickglimpse',
+      name: 'qglimpse',
       script: './packages/server/dist/index.js',
       instances: 1,
       exec_mode: 'fork',

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { CSSProperties, FormEvent, ReactNode } from 'react'
+import QRCode from 'qrcode'
 import { Navigate, NavLink, Route, Routes, useLocation, useNavigate, useSearchParams } from './router'
 
 type Institution = {
@@ -41,6 +42,33 @@ type Question = {
   scheduleStartTime: string | null
   scheduleEndTime: string | null
   createdAt: string
+}
+
+type GuestQuestion = {
+  id: number
+  questionKey: string
+  questionType: Question['questionType']
+  prompt: string
+  options: string[]
+  isDemographic: boolean
+}
+
+type KioskQrToken = {
+  token: string
+  url: string
+  expiresAt: string
+}
+
+type GuestQrPayload = {
+  institution: {
+    id: number
+    name: string
+    slug: string
+    colorScheme: InstitutionColorScheme
+    kioskCompletionMessage: string
+  }
+  expiresAt: string
+  questions: GuestQuestion[]
 }
 
 type BootstrapPayload = {
@@ -200,6 +228,10 @@ function friendlyPlainTextResponse(text: string, fallback: string) {
   if (/cannot\s+(get|post|put|patch|delete)/i.test(trimmed)) return 'The requested server endpoint is not available.'
   if (/<!doctype html|<html/i.test(trimmed)) return 'The server returned a web page instead of app data. Please refresh and try again.'
   return trimmed.length > 180 ? fallback : trimmed
+}
+
+function getQuestionKey(question: { id: number; templateKey?: string | null; questionKey?: string }) {
+  return question.questionKey ?? question.templateKey ?? `iq-${question.id}`
 }
 
 async function readJsonBody<T>(response: Response, fallback: string): Promise<T> {
@@ -567,6 +599,11 @@ function App() {
   const [kioskDemoAnswers, setKioskDemoAnswers] = useState<Record<string, string>>({})
   const [kioskCountdown, setKioskCountdown] = useState(10)
   const [kioskLoading, setKioskLoading] = useState(false)
+  const [kioskFeedbackMessage, setKioskFeedbackMessage] = useState('Your feedback has been recorded.')
+  const [kioskQrToken, setKioskQrToken] = useState<KioskQrToken | null>(null)
+  const [kioskQrImage, setKioskQrImage] = useState('')
+  const [kioskQrLoading, setKioskQrLoading] = useState(false)
+  const [offline, setOffline] = useState(() => !window.navigator.onLine)
   const [crossTabPrimary, setCrossTabPrimary] = useState('')
   const [crossTabDemo, setCrossTabDemo] = useState('')
   const [crossTabData, setCrossTabData] = useState<Array<{ primaryAnswer: string; demoAnswer: string; count: number | '< 5' }> | null>(null)
@@ -579,6 +616,7 @@ function App() {
   const requestedRedirectPath = sanitizeRedirectPath(searchParams.get('next'))
   const authRedirectPath = `/login?next=${encodeURIComponent(currentPath)}`
   const isPublicPath = publicPaths.has(location.pathname)
+  const isGuestQrPath = location.pathname.startsWith('/guest/qr/')
   const isLoginPath = location.pathname === '/login'
   const canOfferInstall = !runningAsInstalledApp
 
@@ -712,6 +750,16 @@ function App() {
     return () => {
       window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt)
       window.removeEventListener('appinstalled', handleAppInstalled)
+    }
+  }, [])
+
+  useEffect(() => {
+    const updateOnlineState = () => setOffline(!window.navigator.onLine)
+    window.addEventListener('online', updateOnlineState)
+    window.addEventListener('offline', updateOnlineState)
+    return () => {
+      window.removeEventListener('online', updateOnlineState)
+      window.removeEventListener('offline', updateOnlineState)
     }
   }, [])
 
@@ -1426,12 +1474,15 @@ function App() {
       else if (question.questionType === 'scale') answer = kioskSliderValue
       else if (question.questionType === 'multiple') answer = kioskMultiAnswers
       else if (question.questionType === 'boolean') answer = kioskCurrentAnswer === 'yes'
-      const qKey = question.templateKey ?? `iq-${question.id}`
-      await fetch('/api/kiosk/answer', {
+      const qKey = getQuestionKey(question)
+      const response = await fetch('/api/kiosk/answer', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ sessionToken: kioskSessionToken, questionKey: qKey, answer }),
       })
+      if (!response.ok) {
+        throw new Error(await responseErrorMessage(response, 'Unable to record answer.'))
+      }
       const nextIdx = kioskCurrentIdx + 1
       if (nextIdx < kioskPromptQuestions.length) {
         setKioskCurrentIdx(nextIdx)
@@ -1460,15 +1511,18 @@ function App() {
       return
     }
 
-    const questionKey = currentDemo.templateKey ?? `iq-${currentDemo.id}`
+    const questionKey = getQuestionKey(currentDemo)
     const answer = kioskDemoAnswers[questionKey]
 
     if (!skip && answer) {
-      await fetch('/api/kiosk/answer', {
+      const response = await fetch('/api/kiosk/answer', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ sessionToken: kioskSessionToken, questionKey, answer }),
       })
+      if (!response.ok) {
+        throw new Error(await responseErrorMessage(response, 'Unable to record answer.'))
+      }
     }
 
     if (kioskDemoIdx + 1 < kioskDemographicQuestions.length) {
@@ -1480,14 +1534,100 @@ function App() {
 
   const completeKiosk = async (demoData: Record<string, string>) => {
     if (!kioskSessionToken) return
-    await fetch('/api/kiosk/complete', {
+    const response = await fetch('/api/kiosk/complete', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ sessionToken: kioskSessionToken, demographicData: demoData }),
     })
+    if (!response.ok) {
+      throw new Error(await responseErrorMessage(response, 'Unable to complete feedback.'))
+    }
+    const result = await readJsonBody<{ feedbackMessage?: string }>(response, 'Unable to complete feedback.')
+    setKioskFeedbackMessage(result.feedbackMessage ?? selectedInstitution?.kioskCompletionMessage ?? 'Your feedback has been recorded.')
     setKioskState('thankyou')
-    setKioskCountdown(10)
+    setKioskCountdown(selectedInstitution?.kioskIdleResetSeconds ?? 10)
   }
+
+  const refreshKioskQrToken = async () => {
+    if (!authToken || !selectedInstitution?.slug || !selectedInstitution.qrModeEnabled) {
+      setKioskQrToken(null)
+      setKioskQrImage('')
+      return
+    }
+    setKioskQrLoading(true)
+    try {
+      const response = await fetch(`/api/kiosk/${selectedInstitution.slug}/qr-token`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${authToken}` },
+      })
+      if (!response.ok) {
+        throw new Error(await responseErrorMessage(response, 'Unable to create QR link.'))
+      }
+      const token = await readJsonBody<KioskQrToken>(response, 'Unable to create QR link.')
+      setKioskQrToken(token)
+      setKioskQrImage(await QRCode.toDataURL(token.url, { margin: 1, width: 256 }))
+    } catch (caughtError) {
+      setKioskQrToken(null)
+      setKioskQrImage('')
+      setError(caughtError instanceof TypeError ? 'The kiosk is offline. QR submission is unavailable.' : caughtError instanceof Error ? caughtError.message : 'Unable to create QR link.')
+    } finally {
+      setKioskQrLoading(false)
+    }
+  }
+
+  const resetKioskToLanding = () => {
+    setKioskState('landing')
+    setKioskSessionToken(null)
+    setKioskQuestions([])
+    setKioskCurrentIdx(0)
+    setKioskCurrentAnswer('')
+    setKioskStarValue(0)
+    setKioskSliderValue(5)
+    setKioskMultiAnswers([])
+    setKioskDemoIdx(0)
+    setKioskDemoAnswers({})
+    setKioskCountdown(selectedInstitution?.kioskIdleResetSeconds ?? 10)
+    setError(null)
+  }
+
+  useEffect(() => {
+    if (sessionUser?.role !== 'institution_kiosk' || kioskState !== 'landing' || !selectedInstitution?.qrModeEnabled) {
+      return
+    }
+
+    const initialTimer = window.setTimeout(() => {
+      void refreshKioskQrToken()
+    }, 0)
+    const interval = window.setInterval(() => {
+      void refreshKioskQrToken()
+    }, 4 * 60 * 1000)
+    return () => {
+      window.clearTimeout(initialTimer)
+      window.clearInterval(interval)
+    }
+    // QR refresh intentionally follows kiosk landing identity/settings only.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessionUser?.role, kioskState, selectedInstitution?.id, selectedInstitution?.qrModeEnabled])
+
+  useEffect(() => {
+    if (sessionUser?.role !== 'institution_kiosk' || kioskState === 'landing' || kioskState === 'thankyou') {
+      return
+    }
+    const idleMs = Math.max(5, selectedInstitution?.kioskIdleResetSeconds ?? 10) * 1000
+    let timer = window.setTimeout(resetKioskToLanding, idleMs)
+    const resetTimer = () => {
+      window.clearTimeout(timer)
+      timer = window.setTimeout(resetKioskToLanding, idleMs)
+    }
+    const events = ['pointerdown', 'keydown', 'touchstart']
+    events.forEach((eventName) => window.addEventListener(eventName, resetTimer, { passive: true }))
+    return () => {
+      window.clearTimeout(timer)
+      events.forEach((eventName) => window.removeEventListener(eventName, resetTimer))
+    }
+    // The reset function only clears kiosk-local state.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessionUser?.role, kioskState, selectedInstitution?.kioskIdleResetSeconds])
 
   if (loading || restoringSession) {
     return <div className="mx-auto flex min-h-screen max-w-6xl items-center justify-center px-6">Loading Qglimpse...</div>
@@ -1499,6 +1639,10 @@ function App() {
 
   if (sessionUser && mustChangePw) {
     return renderRequiredPasswordChange()
+  }
+
+  if (isGuestQrPath) {
+    return <GuestQrPage appVersion={bootstrap.app.version} offline={offline} />
   }
 
   if (sessionUser?.role === 'institution_kiosk' && location.pathname !== '/kiosk') {
@@ -1522,17 +1666,23 @@ function App() {
         kioskDemoIdx={kioskDemoIdx}
         kioskDemoAnswers={kioskDemoAnswers}
         kioskCountdown={kioskCountdown}
+        kioskFeedbackMessage={kioskFeedbackMessage}
+        kioskQrImage={kioskQrImage}
+        kioskQrToken={kioskQrToken}
+        kioskQrLoading={kioskQrLoading}
+        offline={offline}
         error={error}
         onStart={() => void startKiosk()}
         onAnswer={setKioskCurrentAnswer}
         onStarChange={setKioskStarValue}
         onSliderChange={setKioskSliderValue}
         onMultiToggle={(opt) => setKioskMultiAnswers((current) => current.includes(opt) ? current.filter((o) => o !== opt) : [...current, opt])}
-        onSubmitAnswer={() => void submitKioskAnswer()}
+        onSubmitAnswer={() => void submitKioskAnswer().catch((err: unknown) => setError(err instanceof Error ? err.message : 'Unable to submit answer.'))}
         onDemoAnswer={(key, val) => setKioskDemoAnswers((current) => ({ ...current, [key]: val }))}
-        onComplete={() => void completeKiosk(kioskDemoAnswers)}
-        onDemoSkip={() => void advanceKioskDemographic(true)}
-        onDemoNext={() => void advanceKioskDemographic(false)}
+        onComplete={resetKioskToLanding}
+        onDemoSkip={() => void advanceKioskDemographic(true).catch((err: unknown) => setError(err instanceof Error ? err.message : 'Unable to continue.'))}
+        onDemoNext={() => void advanceKioskDemographic(false).catch((err: unknown) => setError(err instanceof Error ? err.message : 'Unable to continue.'))}
+        onRefreshQr={() => void refreshKioskQrToken()}
       /> : <Navigate to={sessionUser ? '/' : authRedirectPath} replace />} />
       <Route path="*" element={
     <div className="min-h-screen bg-gradient-to-b from-[var(--brand-50)] via-white to-slate-50 text-slate-900" style={appThemeStyle}>
@@ -2747,6 +2897,212 @@ function MagicLinkHandler({ onSession }: { onSession: (session: { token: string;
   )
 }
 
+function GuestQrPage({ appVersion, offline }: { appVersion: string; offline: boolean }) {
+  const location = useLocation()
+  const token = decodeURIComponent(location.pathname.replace(/^\/guest\/qr\//, ''))
+  const [payload, setPayload] = useState<GuestQrPayload | null>(null)
+  const [answers, setAnswers] = useState<Record<string, unknown>>({})
+  const [status, setStatus] = useState<'loading' | 'ready' | 'submitting' | 'complete' | 'error'>('loading')
+  const [message, setMessage] = useState('')
+
+  useEffect(() => {
+    let cancelled = false
+    const load = async () => {
+      if (!token) {
+        setStatus('error')
+        setMessage('This QR link is missing its token.')
+        return
+      }
+      try {
+        const response = await fetch(`/api/guest/qr/${encodeURIComponent(token)}`)
+        if (!response.ok) {
+          throw new Error(await responseErrorMessage(response, 'This QR link is no longer available.'))
+        }
+        const result = await readJsonBody<GuestQrPayload>(response, 'This QR link is no longer available.')
+        if (!cancelled) {
+          setPayload(result)
+          setStatus('ready')
+        }
+      } catch (caughtError) {
+        if (!cancelled) {
+          setStatus('error')
+          setMessage(caughtError instanceof TypeError ? 'You appear to be offline. Please reconnect and scan a fresh QR code.' : caughtError instanceof Error ? caughtError.message : 'This QR link is unavailable.')
+        }
+      }
+    }
+    void load()
+    return () => {
+      cancelled = true
+    }
+  }, [token])
+
+  const updateAnswer = (question: GuestQuestion, value: unknown) => {
+    setAnswers((current) => ({ ...current, [getQuestionKey(question)]: value }))
+  }
+
+  const submit = async () => {
+    if (!payload || offline) return
+    setStatus('submitting')
+    setMessage('')
+    const answerList = payload.questions
+      .filter((question) => {
+        const value = answers[getQuestionKey(question)]
+        if (Array.isArray(value)) return value.length > 0
+        if (typeof value === 'string') return value.trim().length > 0
+        return value !== undefined && value !== null
+      })
+      .map((question) => ({ questionKey: getQuestionKey(question), answer: answers[getQuestionKey(question)] }))
+    const hasPromptAnswer = payload.questions.some((question) => !question.isDemographic && answerList.some((answer) => answer.questionKey === getQuestionKey(question)))
+    if (!hasPromptAnswer) {
+      setStatus('ready')
+      setMessage('Please answer the feedback question before submitting.')
+      return
+    }
+
+    try {
+      const response = await fetch(`/api/guest/qr/${encodeURIComponent(token)}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ answers: answerList, demographicData: {} }),
+      })
+      if (!response.ok) {
+        throw new Error(await responseErrorMessage(response, 'Unable to submit feedback.'))
+      }
+      const result = await readJsonBody<{ feedbackMessage?: string }>(response, 'Unable to submit feedback.')
+      setMessage(result.feedbackMessage ?? payload.institution.kioskCompletionMessage)
+      setStatus('complete')
+    } catch (caughtError) {
+      setStatus('ready')
+      setMessage(caughtError instanceof TypeError ? 'Unable to reach the server. Please check your connection and try again.' : caughtError instanceof Error ? caughtError.message : 'Unable to submit feedback.')
+    }
+  }
+
+  const colorScheme = (payload?.institution.colorScheme ?? 'ocean') as InstitutionColorScheme
+  const themeStyle = institutionColorSchemes[colorScheme].style as CSSProperties
+
+  return (
+    <div className="min-h-screen bg-[var(--brand-900)] px-4 py-6 text-white" style={themeStyle}>
+      <main className="mx-auto grid min-h-[calc(100vh-5rem)] max-w-2xl content-center gap-5">
+        <div className="text-center">
+          <QglimpseLogo className="mx-auto h-14 w-14" />
+          <p className="mt-4 text-xs font-semibold uppercase text-[var(--brand-100)]">Guest feedback</p>
+          <h1 className="mt-2 text-3xl font-semibold">{payload?.institution.name ?? 'Qglimpse'}</h1>
+        </div>
+        {offline ? (
+          <p className="rounded-xl border border-amber-500 bg-amber-900/40 px-4 py-3 text-center text-amber-100">
+            You are offline. Reconnect before submitting.
+          </p>
+        ) : null}
+        {status === 'loading' ? (
+          <p className="rounded-xl bg-slate-800 px-4 py-5 text-center text-slate-200">Loading feedback form...</p>
+        ) : null}
+        {status === 'error' ? (
+          <p className="rounded-xl border border-amber-500 bg-amber-900/40 px-4 py-5 text-center text-amber-100">{message}</p>
+        ) : null}
+        {status === 'complete' ? (
+          <section className="rounded-xl bg-slate-800 px-5 py-8 text-center">
+            <div className="mx-auto grid h-20 w-20 place-items-center rounded-full bg-emerald-900/60 text-4xl">✓</div>
+            <h2 className="mt-5 text-2xl font-semibold">Thank you</h2>
+            <p className="mt-3 text-slate-200">{message}</p>
+          </section>
+        ) : null}
+        {(status === 'ready' || status === 'submitting') && payload ? (
+          <form
+            className="grid gap-4"
+            onSubmit={(event) => {
+              event.preventDefault()
+              void submit()
+            }}
+          >
+            {payload.questions.map((question) => (
+              <GuestQuestionField
+                key={getQuestionKey(question)}
+                question={question}
+                value={answers[getQuestionKey(question)]}
+                onChange={(value) => updateAnswer(question, value)}
+              />
+            ))}
+            {message ? <p className="rounded-xl border border-amber-500 bg-amber-900/40 px-4 py-3 text-amber-100">{message}</p> : null}
+            <button
+              className="w-full rounded-full bg-[var(--brand-600)] px-6 py-3 text-base font-semibold text-white shadow-lg shadow-[color:var(--brand-shadow)] disabled:cursor-not-allowed disabled:bg-slate-600"
+              disabled={offline || status === 'submitting'}
+              type="submit"
+            >
+              {status === 'submitting' ? 'Submitting...' : 'Submit feedback'}
+            </button>
+          </form>
+        ) : null}
+      </main>
+      <footer className="pointer-events-none fixed bottom-4 right-4 flex max-w-[calc(100vw-2rem)] items-center justify-end gap-2 text-right text-[0.7rem] font-medium text-slate-300/80">
+        <span>Qglimpse {appVersion}</span>
+        <QglimpseLogo className="h-8 w-8 shrink-0 opacity-90" />
+      </footer>
+    </div>
+  )
+}
+
+function GuestQuestionField({
+  question,
+  value,
+  onChange,
+}: {
+  question: GuestQuestion
+  value: unknown
+  onChange: (value: unknown) => void
+}) {
+  const stringValue = typeof value === 'string' ? value : ''
+  const multiValue = Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : []
+  return (
+    <section className="rounded-xl bg-slate-800 px-4 py-5">
+      <h2 className="text-lg font-semibold leading-snug">{question.prompt}</h2>
+      {question.isDemographic ? <p className="mt-1 text-xs text-slate-400">Optional</p> : null}
+      <div className="mt-4 grid gap-3">
+        {question.questionType === 'single' ? (
+          question.options.map((option) => (
+            <button
+              key={option}
+              className={`rounded-xl px-4 py-3 text-left font-medium ${stringValue === option ? 'bg-[var(--brand-600)] text-white' : 'bg-slate-700 text-slate-100'}`}
+              onClick={() => onChange(option)}
+              type="button"
+            >
+              {option}
+            </button>
+          ))
+        ) : question.questionType === 'multiple' ? (
+          question.options.map((option) => (
+            <button
+              key={option}
+              className={`rounded-xl px-4 py-3 text-left font-medium ${multiValue.includes(option) ? 'bg-[var(--brand-600)] text-white' : 'bg-slate-700 text-slate-100'}`}
+              onClick={() => onChange(multiValue.includes(option) ? multiValue.filter((item) => item !== option) : [...multiValue, option])}
+              type="button"
+            >
+              {option}
+            </button>
+          ))
+        ) : question.questionType === 'boolean' ? (
+          <div className="grid grid-cols-2 gap-3">
+            <button className={`rounded-xl px-4 py-3 font-semibold ${value === true ? 'bg-[var(--brand-600)]' : 'bg-slate-700'}`} onClick={() => onChange(true)} type="button">Yes</button>
+            <button className={`rounded-xl px-4 py-3 font-semibold ${value === false ? 'bg-[var(--brand-600)]' : 'bg-slate-700'}`} onClick={() => onChange(false)} type="button">No</button>
+          </div>
+        ) : question.questionType === 'scale' ? (
+          <div>
+            <input className="w-full accent-[var(--brand-500)]" max="10" min="0" type="range" value={typeof value === 'number' ? value : 5} onChange={(event) => onChange(Number(event.target.value))} />
+            <p className="mt-2 text-center text-2xl font-semibold">{typeof value === 'number' ? value : 5}</p>
+          </div>
+        ) : question.questionType === 'star' ? (
+          <div className="flex justify-between gap-2">
+            {[1, 2, 3, 4, 5].map((star) => (
+              <button key={star} className={`min-h-12 min-w-12 text-4xl ${typeof value === 'number' && value >= star ? 'text-amber-400' : 'text-slate-600'}`} onClick={() => onChange(star)} type="button">★</button>
+            ))}
+          </div>
+        ) : (
+          <textarea className="min-h-28 rounded-xl bg-slate-700 px-4 py-3 text-white placeholder-slate-400" maxLength={1000} placeholder="Type your answer here" value={stringValue} onChange={(event) => onChange(event.target.value)} />
+        )}
+      </div>
+    </section>
+  )
+}
+
 export default App
 
 type KioskFullScreenProps = {
@@ -2764,6 +3120,11 @@ type KioskFullScreenProps = {
   kioskDemoIdx: number
   kioskDemoAnswers: Record<string, string>
   kioskCountdown: number
+  kioskFeedbackMessage: string
+  kioskQrImage: string
+  kioskQrToken: KioskQrToken | null
+  kioskQrLoading: boolean
+  offline: boolean
   error: string | null
   onStart: () => void
   onAnswer: (val: string) => void
@@ -2775,6 +3136,7 @@ type KioskFullScreenProps = {
   onComplete: () => void
   onDemoSkip: () => void
   onDemoNext: () => void
+  onRefreshQr: () => void
 }
 
 function KioskFullScreen(props: KioskFullScreenProps) {
@@ -2783,9 +3145,9 @@ function KioskFullScreen(props: KioskFullScreenProps) {
     appVersion,
     colorScheme,
     kioskCurrentAnswer, kioskStarValue, kioskSliderValue, kioskMultiAnswers,
-    kioskDemoIdx, kioskDemoAnswers, kioskCountdown, error,
+    kioskDemoIdx, kioskDemoAnswers, kioskCountdown, kioskFeedbackMessage, kioskQrImage, kioskQrToken, kioskQrLoading, offline, error,
     onStart, onAnswer, onStarChange, onSliderChange, onMultiToggle,
-    onSubmitAnswer, onDemoAnswer, onComplete, onDemoSkip, onDemoNext,
+    onSubmitAnswer, onDemoAnswer, onComplete, onDemoSkip, onDemoNext, onRefreshQr,
   } = props
 
   const promptQuestions = kioskQuestions.filter((q) => !q.isDemographic)
@@ -2807,16 +3169,48 @@ function KioskFullScreen(props: KioskFullScreenProps) {
             <h1 className="mt-3 text-3xl font-semibold tracking-tight sm:text-4xl md:text-5xl">{institution?.name ?? 'Qglimpse'}</h1>
             <p className="mt-4 max-w-md text-base text-slate-300 sm:text-lg">Share your experience with us. Your feedback helps us improve our service.</p>
           </div>
+          {offline ? (
+            <p className="rounded-xl border border-amber-500 bg-amber-900/40 px-4 py-3 text-amber-100">
+              The kiosk is offline. Feedback submission and QR links will resume when the connection returns.
+            </p>
+          ) : null}
           {error ? (
             <p className="rounded-xl border border-amber-500 bg-amber-900/40 px-4 py-3 text-amber-200">{error}</p>
           ) : null}
           <button
-            className="w-full rounded-full bg-[var(--brand-600)] px-10 py-4 text-lg font-semibold shadow-2xl shadow-[color:var(--brand-shadow)] transition hover:bg-[var(--brand-500)] sm:w-auto sm:text-xl"
+            className="w-full rounded-full bg-[var(--brand-600)] px-10 py-4 text-lg font-semibold shadow-2xl shadow-[color:var(--brand-shadow)] transition hover:bg-[var(--brand-500)] disabled:cursor-not-allowed disabled:bg-slate-600 sm:w-auto sm:text-xl"
+            disabled={offline}
             onClick={onStart}
             type="button"
           >
             Start feedback
           </button>
+          {institution?.qrModeEnabled ? (
+            <section className="grid w-full gap-3 rounded-xl bg-slate-800/80 p-4 text-center shadow-2xl shadow-black/20">
+              <div>
+                <h2 className="text-lg font-semibold">Use your own phone</h2>
+                <p className="mt-1 text-sm text-slate-300">Scan this single-use link to answer privately.</p>
+              </div>
+              {kioskQrImage ? (
+                <img alt="Single-use guest feedback QR code" className="mx-auto h-56 w-56 rounded-xl bg-white p-2" src={kioskQrImage} />
+              ) : (
+                <div className="mx-auto grid h-56 w-56 place-items-center rounded-xl bg-slate-700 px-4 text-sm text-slate-300">
+                  {kioskQrLoading ? 'Preparing QR link...' : 'QR link unavailable'}
+                </div>
+              )}
+              <div className="grid gap-2 text-xs text-slate-300">
+                {kioskQrToken ? <span>Expires {new Date(kioskQrToken.expiresAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span> : null}
+                <button
+                  className="mx-auto rounded-full bg-slate-700 px-4 py-2 text-sm font-semibold text-white transition hover:bg-slate-600 disabled:cursor-not-allowed disabled:bg-slate-700/50"
+                  disabled={offline || kioskQrLoading}
+                  onClick={onRefreshQr}
+                  type="button"
+                >
+                  Refresh QR
+                </button>
+              </div>
+            </section>
+          ) : null}
         </div>
       ) : kioskState === 'questions' && currentQuestion ? (
         <div className="w-full max-w-xl">
@@ -2967,7 +3361,7 @@ function KioskFullScreen(props: KioskFullScreenProps) {
         <div className="flex flex-col items-center gap-6 text-center">
           <div className="flex h-24 w-24 items-center justify-center rounded-full bg-emerald-900/50 text-5xl">✓</div>
           <h1 className="text-3xl font-semibold">Thank you!</h1>
-          <p className="max-w-sm text-slate-300">Your feedback has been recorded. This screen will reset in {kioskCountdown} second{kioskCountdown !== 1 ? 's' : ''}.</p>
+          <p className="max-w-sm text-slate-300">{kioskFeedbackMessage} This screen will reset in {kioskCountdown} second{kioskCountdown !== 1 ? 's' : ''}.</p>
           <button
             className="mt-2 rounded-full bg-slate-700 px-6 py-2.5 text-sm font-semibold transition hover:bg-slate-600"
             onClick={onComplete}
