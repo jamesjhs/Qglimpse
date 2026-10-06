@@ -1,8 +1,9 @@
 # Docker Compose configuration for the qglimpse service
 services:
   qglimpse:
-    # Build the Docker image for the qglimpse service
-    build: . 
+    # Use the prebuilt CI image in deployment; keep build as a local fallback.
+    image: ${QGLIMPSE_IMAGE:-qglimpse:local}
+    build: .
 
     # Set the container name for the qglimpse service
     container_name: qglimpse-${BRANCH_NAME:-main}

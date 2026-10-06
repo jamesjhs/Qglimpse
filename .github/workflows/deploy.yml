@@ -3,6 +3,14 @@ on:
   push:
     branches: [ main ]
 
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: deploy-main
+  cancel-in-progress: true
+
 env:
   SSH_HOST: sshjhs.jahosi.co.uk
   SSH_USER: dockertunnel
@@ -13,7 +21,37 @@ jobs:
     runs-on: ubuntu-latest
     environment: quickglimpse
     steps:
+      - name: Checkout
+        uses: actions/checkout@v4
 
+      - name: Prepare Image Name
+        run: |
+          set -euo pipefail
+          IMAGE_REPOSITORY="ghcr.io/${GITHUB_REPOSITORY,,}"
+          echo "IMAGE_REPOSITORY=${IMAGE_REPOSITORY}" >> "$GITHUB_ENV"
+          echo "IMAGE_REF=${IMAGE_REPOSITORY}:${GITHUB_SHA}" >> "$GITHUB_ENV"
+          echo "IMAGE_LATEST=${IMAGE_REPOSITORY}:main" >> "$GITHUB_ENV"
+
+      - name: Set Up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log In to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and Push Image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: |
+            ${{ env.IMAGE_REF }}
+            ${{ env.IMAGE_LATEST }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
       - name: Install Cloudflared on Runner
         run: |
@@ -89,6 +127,7 @@ jobs:
           echo "SMTP_SECURE_LOGIN_TYPE=$SMTP_SECURE_LOGIN_TYPE" >> .env
           echo "SMTP_SEND_ADDRESS=$SMTP_SEND_ADDRESS" >> .env
           echo "SMTP_SERVER_ADDRESS=$SMTP_SERVER_ADDRESS" >> .env
+          echo "QGLIMPSE_IMAGE=$IMAGE_REF" >> .env
 
           echo "Environment variables written to .env file successfully."
           echo "[debug] .env line count: $(wc -l < .env)"
@@ -102,6 +141,8 @@ jobs:
           # cloudflared reads the Access service token from these variable names
           TUNNEL_SERVICE_TOKEN_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
           TUNNEL_SERVICE_TOKEN_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
+          GHCR_USERNAME: ${{ secrets.GHCR_USERNAME }}
+          GHCR_TOKEN: ${{ secrets.GHCR_TOKEN }}
         run: |
           set -euo pipefail
           if [ -n "$TUNNEL_SERVICE_TOKEN_ID" ]; then echo "[debug] TUNNEL_SERVICE_TOKEN_ID: key is NOT blank"; else echo "[debug] TUNNEL_SERVICE_TOKEN_ID: key IS BLANK"; fi
@@ -113,10 +154,20 @@ jobs:
             -H "CF-Access-Client-Secret: ${TUNNEL_SERVICE_TOKEN_SECRET}" \
             "https://${SSH_HOST}/cdn-cgi/access/get-identity" || true
 
-          # 1. Securely copy the .env file through the Cloudflare Tunnel to your app folder
-          scp -v .env ${SSH_HOST}:${DEPLOY_PATH}/.env
+          # 1. Securely copy the runtime configuration through the Cloudflare Tunnel.
+          scp -v .env docker-compose.yml ${SSH_HOST}:${DEPLOY_PATH}/
           
-          # 2. Run the deployment commands through the Tunnel
-          ssh -v ${SSH_HOST} "cd ${DEPLOY_PATH} && git pull origin main && docker compose up -d --build"
+          # 2. Pull the prebuilt image and restart. No source build runs on the server.
+          REMOTE_GHCR_USERNAME=$(printf '%q' "$GHCR_USERNAME")
+          REMOTE_GHCR_TOKEN=$(printf '%q' "$GHCR_TOKEN")
+          ssh -v ${SSH_HOST} "cd ${DEPLOY_PATH} && GHCR_USERNAME=${REMOTE_GHCR_USERNAME} GHCR_TOKEN=${REMOTE_GHCR_TOKEN} sh -s" <<'REMOTE_DEPLOY'
+          set -eu
+          if [ -n "${GHCR_USERNAME}" ] && [ -n "${GHCR_TOKEN}" ]; then
+            echo "${GHCR_TOKEN}" | docker login ghcr.io -u "${GHCR_USERNAME}" --password-stdin
+          fi
+          docker compose pull qglimpse
+          docker compose up -d --no-build qglimpse
+          docker image prune -f
+          REMOTE_DEPLOY
           echo "Deployment finished successfully."
 
