@@ -1,25 +1,24 @@
 name: Deploy to Debian
 on:
   push:
-    branches: [ main ]
+    branches: [ main, testing ]
 
 permissions:
   contents: read
   packages: write
 
 concurrency:
-  group: deploy-main
+  group: deploy-${{ github.ref_name }}
   cancel-in-progress: true
 
 env:
   SSH_HOST: sshjhs.jahosi.co.uk
   SSH_USER: dockertunnel
-  DEPLOY_PATH: /home/dockertunnel/qglimpse.jahosi.co.uk-2010
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    environment: quickglimpse
+    environment: ${{ github.ref_name == 'main' && 'quickglimpse' || 'testing' }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -27,10 +26,20 @@ jobs:
       - name: Prepare Image Name
         run: |
           set -euo pipefail
+          REF_SLUG="${GITHUB_REF_NAME//[^A-Za-z0-9_.-]/-}"
           IMAGE_REPOSITORY="ghcr.io/${GITHUB_REPOSITORY,,}"
+          APP_PORT="${{ vars.PORT || '2010' }}"
+          QUICKGLIMPSE_BASE_URL="${{ vars.QUICKGLIMPSE_BASE_URL }}"
+          test -n "$QUICKGLIMPSE_BASE_URL"
+          QGLIMPSE_DOMAIN="$(node -e "console.log(new URL(process.argv[1]).hostname)" "$QUICKGLIMPSE_BASE_URL")"
+          DEPLOY_PATH="/home/dockertunnel/qglimpse.${REF_SLUG}-${APP_PORT}"
+          echo "REF_SLUG=${REF_SLUG}" >> "$GITHUB_ENV"
+          echo "APP_PORT=${APP_PORT}" >> "$GITHUB_ENV"
+          echo "QGLIMPSE_DOMAIN=${QGLIMPSE_DOMAIN}" >> "$GITHUB_ENV"
+          echo "DEPLOY_PATH=${DEPLOY_PATH}" >> "$GITHUB_ENV"
           echo "IMAGE_REPOSITORY=${IMAGE_REPOSITORY}" >> "$GITHUB_ENV"
           echo "IMAGE_REF=${IMAGE_REPOSITORY}:${GITHUB_SHA}" >> "$GITHUB_ENV"
-          echo "IMAGE_LATEST=${IMAGE_REPOSITORY}:main" >> "$GITHUB_ENV"
+          echo "IMAGE_LATEST=${IMAGE_REPOSITORY}:${REF_SLUG}" >> "$GITHUB_ENV"
 
       - name: Set Up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -98,7 +107,6 @@ jobs:
           SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
           SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
           # Pull VARIABLES
-          PORT: ${{ vars.PORT || '2010' }}
           NODE_ENV: ${{ vars.NODE_ENV }}
           QUICKGLIMPSE_BASE_URL: ${{ vars.QUICKGLIMPSE_BASE_URL }}
           QUICKGLIMPSE_TRUST_PROXY: ${{ vars.QUICKGLIMPSE_TRUST_PROXY }}
@@ -110,7 +118,14 @@ jobs:
           SMTP_SERVER_ADDRESS: ${{ vars.SMTP_SERVER_ADDRESS }}
         run: |
           set -euo pipefail
+
           # Write all variables into a local .env file on the runner
+
+          PORT="${APP_PORT:-2010}"
+          BRANCH_NAME="${REF_SLUG:-${GITHUB_REF_NAME}}"
+          test -n "$QGLIMPSE_DOMAIN"
+          test -n "$PORT"
+
           echo "QUICKGLIMPSE_DB_PATH=$QUICKGLIMPSE_DB_PATH" > .env
           echo "QUICKGLIMPSE_DATA_DIR=$QUICKGLIMPSE_DATA_DIR" >> .env
           echo "QUICKGLIMPSE_DB_ENCRYPTION_KEY=$QUICKGLIMPSE_DB_ENCRYPTION_KEY" >> .env
@@ -121,6 +136,8 @@ jobs:
           echo "TURNSTILE_SITE_KEY=$TURNSTILE_SITE_KEY" >> .env
           echo "SMTP_USERNAME=$SMTP_USERNAME" >> .env
           echo "SMTP_PASSWORD=$SMTP_PASSWORD" >> .env
+          echo "BRANCH_NAME=$BRANCH_NAME" >> .env
+          echo "QGLIMPSE_DOMAIN=$QGLIMPSE_DOMAIN" >> .env
           echo "PORT=$PORT" >> .env
           echo "NODE_ENV=$NODE_ENV" >> .env
           echo "QUICKGLIMPSE_BASE_URL=$QUICKGLIMPSE_BASE_URL" >> .env
@@ -159,6 +176,7 @@ jobs:
             "https://${SSH_HOST}/cdn-cgi/access/get-identity" || true
 
           # 1. Securely copy the runtime configuration through the Cloudflare Tunnel.
+          ssh -v ${SSH_HOST} "mkdir -p ${DEPLOY_PATH}"
           scp -v .env docker-compose.yml ${SSH_HOST}:${DEPLOY_PATH}/
           
           # 2. Pull the prebuilt image and restart. No source build runs on the server.

@@ -23,7 +23,7 @@ services:
     
     # Mount the persistent data volume into the container
     volumes:
-      - ./persistent-data:/app/data
+      - ./persistent-data-${BRANCH_NAME:-main}:/app/data
     
     # Connect the container to the proxy network
     networks:
@@ -34,9 +34,9 @@ services:
       - "traefik.enable=true"
 
       # Define the routing rule for the qglimpse service based on the host name
-      - "traefik.http.routers.qglimpse-${BRANCH_NAME:-main}.rule=Host(`qglimpse.jahosi.co.uk`)"
+      - "traefik.http.routers.qglimpse-${BRANCH_NAME:-main}.rule=Host(`${QGLIMPSE_DOMAIN:?QGLIMPSE_DOMAIN must be set}`)"
 
-      # Define the internal port for the qglimpse service within the container
+      # Dynamic service name and port mapping matching the APP_PORT build arg
       - "traefik.http.services.qglimpse-${BRANCH_NAME:-main}.loadbalancer.server.port=${PORT:?PORT must be set}"
 
 # Define the external networks used by the services
