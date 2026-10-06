@@ -187,8 +187,15 @@ jobs:
           if [ -n "${GHCR_USERNAME}" ] && [ -n "${GHCR_TOKEN}" ]; then
             echo "${GHCR_TOKEN}" | docker login ghcr.io -u "${GHCR_USERNAME}" --password-stdin
           fi
+          BRANCH_NAME="$(awk -F= '$1 == "BRANCH_NAME" { print $2 }' .env | tail -n 1)"
+          CONTAINER_NAME="qglimpse-${BRANCH_NAME:-main}"
+          EXISTING_CONTAINER="$(docker ps -aq --filter "name=^/${CONTAINER_NAME}$" | head -n 1)"
+          if [ -n "${EXISTING_CONTAINER}" ]; then
+            echo "Removing existing ${CONTAINER_NAME} container before recreate."
+            docker rm -f "${EXISTING_CONTAINER}"
+          fi
           docker compose pull qglimpse
-          docker compose up -d --no-build qglimpse
+          docker compose up -d --no-build --remove-orphans qglimpse
           docker image prune -f
           REMOTE_DEPLOY
           echo "Deployment finished successfully."
