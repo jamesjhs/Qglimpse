@@ -19,6 +19,8 @@ jobs:
       - name: Configure SSH over Cloudflare
         env:
           SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          CF_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
+          CF_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
         run: |
           mkdir -p ~/.ssh
           echo "$SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
@@ -27,7 +29,7 @@ jobs:
           # Tell SSH to use Cloudflared as the proxy for your domain
           cat << 'EOF' >> ~/.ssh/config
           Host sshjhs.jahosi.co.uk
-            ProxyCommand /usr/local/bin/cloudflared access ssh --hostname %h
+            ProxyCommand env TUNNEL_SERVICE_AUTH_ID=$CF_CLIENT_ID TUNNEL_SERVICE_AUTH_SECRET=$CF_CLIENT_SECRET /usr/local/bin/cloudflared access ssh --hostname %h
             StrictHostKeyChecking no
             User dockertunnel
             IdentityFile ~/.ssh/id_ed25519
