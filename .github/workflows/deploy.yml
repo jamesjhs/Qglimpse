@@ -29,20 +29,12 @@ jobs:
           # Tell SSH to use Cloudflared as the proxy for your domain
           cat << 'EOF' >> ~/.ssh/config
           Host sshjhs.jahosi.co.uk
-            ProxyCommand env TUNNEL_SERVICE_AUTH_ID=$CF_CLIENT_ID TUNNEL_SERVICE_AUTH_SECRET=$CF_CLIENT_SECRET /usr/local/bin/cloudflared access ssh --hostname %h
+            ProxyCommand /usr/local/bin/cloudflared access ssh --hostname %h --service-token-id $CF_CLIENT_ID --service-token-secret $CF_CLIENT_SECRET
             StrictHostKeyChecking no
             User dockertunnel
             IdentityFile ~/.ssh/id_ed25519
           EOF
 
-      - name: Test SSH Connection
-        env:
-          TUNNEL_SERVICE_AUTH_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
-          TUNNEL_SERVICE_AUTH_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
-        run: |
-          ssh -T sshjhs.jahosi.co.uk
-          echo "SSH connection test completed."
-          
       - name: Build Secure .env File
         env:
           # Pull SECRETS
