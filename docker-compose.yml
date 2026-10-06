@@ -33,7 +33,8 @@ services:
       # Traefik labels for the qglimpse service
       - "traefik.enable=true"
 
-      # Define the routing rule for the qglimpse service based on the host name
+      # Route by the hostname derived from QUICKGLIMPSE_BASE_URL.
+      # Testing should use test-qglimpse.jahosi.co.uk, not test.qglimpse.jahosi.co.uk.
       - "traefik.http.routers.qglimpse-${BRANCH_NAME:-main}.rule=Host(`${QGLIMPSE_DOMAIN:?QGLIMPSE_DOMAIN must be set}`)"
 
       # Dynamic service name and port mapping matching the APP_PORT build arg

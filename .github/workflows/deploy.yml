@@ -32,6 +32,10 @@ jobs:
           QUICKGLIMPSE_BASE_URL="${{ vars.QUICKGLIMPSE_BASE_URL }}"
           test -n "$QUICKGLIMPSE_BASE_URL"
           QGLIMPSE_DOMAIN="$(node -e "console.log(new URL(process.argv[1]).hostname)" "$QUICKGLIMPSE_BASE_URL")"
+          if [ "$REF_SLUG" = "testing" ] && [ "$QGLIMPSE_DOMAIN" != "test-qglimpse.jahosi.co.uk" ]; then
+            echo "::error::The testing environment QUICKGLIMPSE_BASE_URL must use https://test-qglimpse.jahosi.co.uk, not a nested hostname like https://test.qglimpse.jahosi.co.uk."
+            exit 1
+          fi
           DEPLOY_PATH="/home/dockertunnel/qglimpse.${REF_SLUG}-${APP_PORT}"
           echo "REF_SLUG=${REF_SLUG}" >> "$GITHUB_ENV"
           echo "APP_PORT=${APP_PORT}" >> "$GITHUB_ENV"
