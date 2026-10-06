@@ -2,6 +2,8 @@ FROM node:20-alpine
 
 WORKDIR /app
 
+RUN apk add --no-cache python3 make g++
+
 COPY package*.json ./
 COPY packages/web/package.json packages/web/package.json
 COPY packages/server/package.json packages/server/package.json
