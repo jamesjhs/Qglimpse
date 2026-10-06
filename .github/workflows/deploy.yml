@@ -26,10 +26,10 @@ jobs:
           echo "$SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/id_ed25519
           
-          # Tell SSH to use Cloudflared as the proxy for your domain
+          # Tell SSH to use Cloudflared as the proxy for your domain (service token is read from TUNNEL_SERVICE_AUTH_ID/SECRET env vars)
           cat << 'EOF' >> ~/.ssh/config
           Host sshgit.jahosi.co.uk
-            ProxyCommand /usr/local/bin/cloudflared access ssh --hostname %h --service-token-id $CF_CLIENT_ID --service-token-secret $CF_CLIENT_SECRET
+            ProxyCommand /usr/local/bin/cloudflared access ssh --hostname %h
             StrictHostKeyChecking no
             User dockertunnel
             IdentityFile ~/.ssh/id_ed25519
