@@ -37,7 +37,7 @@ jobs:
           # Tell SSH to use Cloudflared as the proxy for your domain (service token is read from TUNNEL_SERVICE_AUTH_ID/SECRET env vars)
           cat << 'EOF' >> ~/.ssh/config
           Host sshgit.jahosi.co.uk
-            ProxyCommand /usr/local/bin/cloudflared access ssh --hostname %h
+            ProxyCommand /usr/local/bin/cloudflared access ssh --hostname %h --service-token-id $TUNNEL_SERVICE_TOKEN_ID --service-token-secret $TUNNEL_SERVICE_TOKEN_SECRET
             StrictHostKeyChecking no
             LogLevel DEBUG1
             User dockertunnel
