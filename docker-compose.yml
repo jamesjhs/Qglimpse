@@ -1,0 +1,40 @@
+# Docker Compose configuration for the qglimpse service
+services:
+  qglimpse:
+    # Build the Docker image for the qglimpse service
+    build: . 
+
+    # Set the container name for the qglimpse service
+    container_name: qglimpse-${BRANCH_NAME:-main}
+
+    # Always restart the container unless it is explicitly stopped
+    restart: unless-stopped
+
+    # Load environment variables from the .env file
+    env_file:
+      - .env
+    
+    # Mount the persistent data volume into the container
+    volumes:
+      - ./persistent-data:/app/data
+    
+    # Connect the container to the proxy network
+    networks:
+      - proxy
+
+    labels:
+      # Traefik labels for the qglimpse service
+      - "traefik.enable=true"
+
+      # Define the routing rule for the qglimpse service based on the host name
+      - "traefik.http.routers.qglimpse-${BRANCH_NAME:-main}.rule=Host(`qglimpse.jahosi.co.uk`)"
+
+      # Define the internal port for the qglimpse service within the container
+      - "traefik.http.services.qglimpse-${BRANCH_NAME:-main}.loadbalancer.server.port=2010"
+
+# Define the external networks used by the services
+networks:
+  proxy:
+  
+    # Use an externally defined network named 'proxy'
+    external: true

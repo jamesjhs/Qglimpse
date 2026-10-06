@@ -1,0 +1,103 @@
+name: Deploy to Debian
+on:
+  push:
+    branches: [ main ]
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: quickglimpse
+    steps:
+
+
+      - name: Install Cloudflared on Runner
+        run: |
+          curl -L https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 -o cloudflared
+          chmod +x cloudflared
+          sudo mv cloudflared /usr/local/bin/
+
+
+      - name: Configure SSH over Cloudflare
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+        run: |
+          mkdir -p ~/.ssh
+          echo "$SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          
+          # Tell SSH to use Cloudflared as the proxy for your domain
+          cat << 'EOF' >> ~/.ssh/config
+          Host sshjhs.jahosi.co.uk
+            ProxyCommand /usr/local/bin/cloudflared access ssh --hostname %h
+            StrictHostKeyChecking no
+            User dockertunnel
+            IdentityFile ~/.ssh/id_ed25519
+          EOF
+
+      - name: Test SSH Connection
+        env:
+          CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
+          CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
+        run: |
+          ssh -T sshjhs.jahosi.co.uk
+          echo "SSH connection test completed."
+          
+      - name: Build Secure .env File
+        env:
+          # Pull SECRETS
+          QUICKGLIMPSE_DB_PATH: ${{ secrets.QUICKGLIMPSE_DB_PATH }}
+          QUICKGLIMPSE_DATA_DIR: ${{ secrets.QUICKGLIMPSE_DATA_DIR }}
+          QUICKGLIMPSE_DB_ENCRYPTION_KEY: ${{ secrets.QUICKGLIMPSE_DB_ENCRYPTION_KEY }}
+          QUICKGLIMPSE_ROOT_SEED_PASSWORD: ${{ secrets.QUICKGLIMPSE_ROOT_SEED_PASSWORD }}
+          QUICKGLIMPSE_INSTITUTION_SEED_PASSWORD: ${{ secrets.QUICKGLIMPSE_INSTITUTION_SEED_PASSWORD }}
+          QUICKGLIMPSE_SESSION_SECRET: ${{ secrets.QUICKGLIMPSE_SESSION_SECRET }}
+          TURNSTILE_SECRET_KEY: ${{ secrets.TURNSTILE_SECRET_KEY }}
+          TURNSTILE_SITE_KEY: ${{ secrets.TURNSTILE_SITE_KEY }}
+          SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          # Pull VARIABLES
+          NODE_ENV: ${{ vars.NODE_ENV }}
+          QUICKGLIMPSE_BASE_URL: ${{ vars.QUICKGLIMPSE_BASE_URL }}
+          QUICKGLIMPSE_TRUST_PROXY: ${{ vars.QUICKGLIMPSE_TRUST_PROXY }}
+          QUICKGLIMPSE_SESSION_TTL_MS: ${{ vars.QUICKGLIMPSE_SESSION_TTL_MS }}
+          QUICKGLIMPSE_SESSION_IDLE_TTL_MS: ${{ vars.QUICKGLIMPSE_SESSION_IDLE_TTL_MS }}
+          SMTP_PORT: ${{ vars.SMTP_PORT }}
+          SMTP_SECURE_LOGIN_TYPE: ${{ vars.SMTP_SECURE_LOGIN_TYPE }}
+          SMTP_SEND_ADDRESS: ${{ vars.SMTP_SEND_ADDRESS }}
+          SMTP_SERVER_ADDRESS: ${{ vars.SMTP_SERVER_ADDRESS }}
+        run: |
+          # Write all variables into a local .env file on the runner
+          echo "QUICKGLIMPSE_DB_PATH=$QUICKGLIMPSE_DB_PATH" > .env
+          echo "QUICKGLIMPSE_DATA_DIR=$QUICKGLIMPSE_DATA_DIR" >> .env
+          echo "QUICKGLIMPSE_DB_ENCRYPTION_KEY=$QUICKGLIMPSE_DB_ENCRYPTION_KEY" >> .env
+          echo "QUICKGLIMPSE_ROOT_SEED_PASSWORD=$QUICKGLIMPSE_ROOT_SEED_PASSWORD" >> .env
+          echo "QUICKGLIMPSE_INSTITUTION_SEED_PASSWORD=$QUICKGLIMPSE_INSTITUTION_SEED_PASSWORD" >> .env
+          echo "QUICKGLIMPSE_SESSION_SECRET=$QUICKGLIMPSE_SESSION_SECRET" >> .env
+          echo "TURNSTILE_SECRET_KEY=$TURNSTILE_SECRET_KEY" >> .env
+          echo "TURNSTILE_SITE_KEY=$TURNSTILE_SITE_KEY" >> .env
+          echo "SMTP_USERNAME=$SMTP_USERNAME" >> .env
+          echo "SMTP_PASSWORD=$SMTP_PASSWORD" >> .env
+          echo "NODE_ENV=$NODE_ENV" >> .env
+          echo "QUICKGLIMPSE_BASE_URL=$QUICKGLIMPSE_BASE_URL" >> .env
+          echo "QUICKGLIMPSE_TRUST_PROXY=$QUICKGLIMPSE_TRUST_PROXY" >> .env
+          echo "QUICKGLIMPSE_SESSION_TTL_MS=$QUICKGLIMPSE_SESSION_TTL_MS" >> .env
+          echo "QUICKGLIMPSE_SESSION_IDLE_TTL_MS=$QUICKGLIMPSE_SESSION_IDLE_TTL_MS" >> .env
+          echo "SMTP_PORT=$SMTP_PORT" >> .env
+          echo "SMTP_SECURE_LOGIN_TYPE=$SMTP_SECURE_LOGIN_TYPE" >> .env
+          echo "SMTP_SEND_ADDRESS=$SMTP_SEND_ADDRESS" >> .env
+          echo "SMTP_SERVER_ADDRESS=$SMTP_SERVER_ADDRESS" >> .env
+
+          echo "Environment variables written to .env file successfully."
+
+
+      - name: Deploy to Server via Tunnel
+        env:
+          CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
+          CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
+        run: |
+          # 1. Securely copy the .env file through the Cloudflare Tunnel to your app folder
+          scp .env sshjhs.jahosi.co.uk:/home/dockertunnel/qglimpse.jahosi.co.uk-2010/.env
+          
+          # 2. Run the deployment commands through the Tunnel
+          ssh sshjhs.jahosi.co.uk "cd /home/dockertunnel/qglimpse.jahosi.co.uk-2010 && git pull origin main && docker compose up -d --build"
+          echo "Deployment finished successfully."
+
