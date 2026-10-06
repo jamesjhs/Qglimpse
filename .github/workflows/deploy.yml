@@ -21,25 +21,19 @@ jobs:
       - name: Configure SSH over Cloudflare
         env:
           SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
-          CF_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
-          CF_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
+          TUNNEL_SERVICE_TOKEN_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
+          TUNNEL_SERVICE_TOKEN_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
         run: |
-          set -x
-          check() { if [ -n "$2" ]; then echo "[debug] $1: key is NOT blank"; else echo "[debug] $1: key IS BLANK"; fi; }
-          check SSH_PRIVATE_KEY "$SSH_PRIVATE_KEY"
-          check CF_ACCESS_CLIENT_ID "$CF_CLIENT_ID"
-          check CF_ACCESS_CLIENT_SECRET "$CF_CLIENT_SECRET"
           mkdir -p ~/.ssh
           echo "$SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/id_ed25519
-          ls -l ~/.ssh/id_ed25519
           
-          # Tell SSH to use Cloudflared as the proxy for your domain (service token is read from TUNNEL_SERVICE_AUTH_ID/SECRET env vars)
-          cat << 'EOF' >> ~/.ssh/config
+          # We use the Linux 'env' command to securely pass the tokens into memory 
+          # without using any command-line flags that confuse cloudflared.
+          cat << EOF >> ~/.ssh/config
           Host sshgit.jahosi.co.uk
-            ProxyCommand /usr/local/bin/cloudflared access ssh --hostname %h --service-token-id $TUNNEL_SERVICE_TOKEN_ID --service-token-secret $TUNNEL_SERVICE_TOKEN_SECRET
+            ProxyCommand env TUNNEL_SERVICE_TOKEN_ID="$TUNNEL_SERVICE_TOKEN_ID" TUNNEL_SERVICE_TOKEN_SECRET="$TUNNEL_SERVICE_TOKEN_SECRET" /usr/local/bin/cloudflared access ssh --hostname %h
             StrictHostKeyChecking no
-            LogLevel DEBUG1
             User dockertunnel
             IdentityFile ~/.ssh/id_ed25519
           EOF
