@@ -2,6 +2,12 @@ name: Deploy to Debian
 on:
   push:
     branches: [ main ]
+
+env:
+  SSH_HOST: sshgit.jahosi.co.uk
+  SSH_USER: dockertunnel
+  DEPLOY_PATH: /home/dockertunnel/qglimpse.jahosi.co.uk-2010
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
@@ -11,7 +17,7 @@ jobs:
 
       - name: Install Cloudflared on Runner
         run: |
-          set -x
+          set -euo pipefail
           curl -fL https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 -o cloudflared
           chmod +x cloudflared
           sudo mv cloudflared /usr/local/bin/
@@ -21,22 +27,22 @@ jobs:
       - name: Configure SSH over Cloudflare
         env:
           SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
-          TUNNEL_SERVICE_TOKEN_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
-          TUNNEL_SERVICE_TOKEN_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
         run: |
+          set -euo pipefail
+          test -n "$SSH_PRIVATE_KEY"
           mkdir -p ~/.ssh
           echo "$SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/id_ed25519
-          
-          # We use the Linux 'env' command to securely pass the tokens into memory 
-          # without using any command-line flags that confuse cloudflared.
-          cat << EOF >> ~/.ssh/config
-          Host sshgit.jahosi.co.uk
-            ProxyCommand env TUNNEL_SERVICE_TOKEN_ID="$TUNNEL_SERVICE_TOKEN_ID" TUNNEL_SERVICE_TOKEN_SECRET="$TUNNEL_SERVICE_TOKEN_SECRET" /usr/local/bin/cloudflared access ssh --hostname %h
+
+          cat > ~/.ssh/config << EOF
+          Host ${SSH_HOST}
+            HostName ${SSH_HOST}
             StrictHostKeyChecking no
-            User dockertunnel
+            User ${SSH_USER}
             IdentityFile ~/.ssh/id_ed25519
+            ProxyCommand /usr/local/bin/cloudflared access ssh --hostname %h --loglevel debug
           EOF
+          chmod 600 ~/.ssh/config
 
       - name: Build Secure .env File
         env:
@@ -62,7 +68,7 @@ jobs:
           SMTP_SEND_ADDRESS: ${{ vars.SMTP_SEND_ADDRESS }}
           SMTP_SERVER_ADDRESS: ${{ vars.SMTP_SERVER_ADDRESS }}
         run: |
-          set -x
+          set -euo pipefail
           # Write all variables into a local .env file on the runner
           echo "QUICKGLIMPSE_DB_PATH=$QUICKGLIMPSE_DB_PATH" > .env
           echo "QUICKGLIMPSE_DATA_DIR=$QUICKGLIMPSE_DATA_DIR" >> .env
@@ -97,13 +103,20 @@ jobs:
           TUNNEL_SERVICE_TOKEN_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
           TUNNEL_SERVICE_TOKEN_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
         run: |
-          set -x
+          set -euo pipefail
           if [ -n "$TUNNEL_SERVICE_TOKEN_ID" ]; then echo "[debug] TUNNEL_SERVICE_TOKEN_ID: key is NOT blank"; else echo "[debug] TUNNEL_SERVICE_TOKEN_ID: key IS BLANK"; fi
           if [ -n "$TUNNEL_SERVICE_TOKEN_SECRET" ]; then echo "[debug] TUNNEL_SERVICE_TOKEN_SECRET: key is NOT blank"; else echo "[debug] TUNNEL_SERVICE_TOKEN_SECRET: key IS BLANK"; fi
+
+          echo "[debug] Probing Cloudflare Access for ${SSH_HOST}"
+          curl --silent --show-error --output /tmp/access-preflight-body.txt --write-out "[debug] Access preflight HTTP status: %{http_code}\n" \
+            -H "CF-Access-Client-Id: ${TUNNEL_SERVICE_TOKEN_ID}" \
+            -H "CF-Access-Client-Secret: ${TUNNEL_SERVICE_TOKEN_SECRET}" \
+            "https://${SSH_HOST}/cdn-cgi/access/get-identity" || true
+
           # 1. Securely copy the .env file through the Cloudflare Tunnel to your app folder
-          scp -v .env sshgit.jahosi.co.uk:/home/dockertunnel/qglimpse.jahosi.co.uk-2010/.env
+          scp -v .env ${SSH_HOST}:${DEPLOY_PATH}/.env
           
           # 2. Run the deployment commands through the Tunnel
-          ssh -v sshgit.jahosi.co.uk "cd /home/dockertunnel/qglimpse.jahosi.co.uk-2010 && git pull origin main && docker compose up -d --build"
+          ssh -v ${SSH_HOST} "cd ${DEPLOY_PATH} && git pull origin main && docker compose up -d --build"
           echo "Deployment finished successfully."
 
