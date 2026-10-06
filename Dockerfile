@@ -1,5 +1,7 @@
 FROM node:20-alpine
-WORKDIR /
+
+## Dockerfile for the Qglimpse Node.js application
+WORKDIR / 
 COPY package*.json ./
 RUN npm ci
 COPY . .
