@@ -29,10 +29,9 @@ jobs:
           REF_SLUG="${GITHUB_REF_NAME//[^A-Za-z0-9_.-]/-}"
           IMAGE_REPOSITORY="ghcr.io/${GITHUB_REPOSITORY,,}"
           APP_PORT="${{ vars.PORT || '2010' }}"
-          QGLIMPSE_DOMAIN="${{ vars.QGLIMPSE_DOMAIN }}"
-          if [ -z "$QGLIMPSE_DOMAIN" ]; then
-            QGLIMPSE_DOMAIN="$(node -e "console.log(new URL(process.argv[1]).hostname)" "${{ vars.QUICKGLIMPSE_BASE_URL }}")"
-          fi
+          QUICKGLIMPSE_BASE_URL="${{ vars.QUICKGLIMPSE_BASE_URL }}"
+          test -n "$QUICKGLIMPSE_BASE_URL"
+          QGLIMPSE_DOMAIN="$(node -e "console.log(new URL(process.argv[1]).hostname)" "$QUICKGLIMPSE_BASE_URL")"
           DEPLOY_PATH="/home/dockertunnel/qglimpse.${REF_SLUG}-${APP_PORT}"
           echo "REF_SLUG=${REF_SLUG}" >> "$GITHUB_ENV"
           echo "APP_PORT=${APP_PORT}" >> "$GITHUB_ENV"
