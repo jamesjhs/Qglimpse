@@ -40,7 +40,7 @@ The Dockerfile creates a production-only Node container in three stages:
    - Uses `node:20-alpine`.
    - Sets `NODE_ENV=production`.
    - Copies only production dependencies, compiled server files, built web assets, package metadata, and scripts.
-   - Exposes port `2010`.
+   - Exposes the build-time `APP_PORT`, which defaults to `2010` and is set from the GitHub `PORT` variable during CI builds.
    - Starts with `npm start`.
 
 This means the server should not build source code on the VPS during deployment. GitHub Actions builds the image, and the server only pulls and runs it.
@@ -71,7 +71,7 @@ Important details:
 - `docker compose up -d --no-build qglimpse` restarts the service without building on the VPS.
 - `./persistent-data:/app/data` keeps database files and runtime data outside the container so they survive image replacement.
 - The app joins an external Docker network named `proxy`.
-- Traefik labels route `qglimpse.jahosi.co.uk` to internal container port `2010`.
+- Traefik labels route `qglimpse.jahosi.co.uk` to the internal container port from `PORT`.
 
 The external `proxy` network and whatever proxy/tunnel container uses it must already exist on the Debian server.
 
@@ -317,6 +317,7 @@ Add these as environment variables:
 
 | Variable | Recommended value |
 |----------|-------------------|
+| `PORT` | Internal container port for Node and Traefik, currently `2010`. |
 | `NODE_ENV` | `production` |
 | `QUICKGLIMPSE_BASE_URL` | `https://qglimpse.jahosi.co.uk` |
 | `QUICKGLIMPSE_TRUST_PROXY` | `1` |
@@ -376,7 +377,7 @@ Before the first automated deployment, confirm:
 7. The `quickglimpse` GitHub environment exists.
 8. All required GitHub secrets and variables are present.
 9. The GHCR pull token works.
-10. DNS and Traefik routing for `qglimpse.jahosi.co.uk` point at the container on port `2010`.
+10. DNS and Traefik routing for `qglimpse.jahosi.co.uk` point at the container on the configured `PORT`.
 
 ## 7. Daily push-to-deploy workflow
 
@@ -477,7 +478,7 @@ docker compose logs --tail=100 qglimpse
 Confirm:
 
 - The `qglimpse` service is `Up`.
-- The app is listening internally on port `2010`.
+- The app is listening internally on the configured `PORT`.
 - No production fail-closed configuration errors appear.
 - The database path is inside `/app/data`.
 - The mounted host directory `persistent-data` contains the durable database files.
@@ -595,7 +596,7 @@ Check:
 - The GitHub Actions run deployed the commit you expected.
 - The `.env` on the server has the expected `QGLIMPSE_IMAGE`.
 - `docker compose ps` shows a recently recreated container.
-- Traefik is routing `qglimpse.jahosi.co.uk` to service port `2010`.
+- Traefik is routing `qglimpse.jahosi.co.uk` to the service port from `PORT`.
 - Browser/PWA cache has refreshed. If needed, hard refresh or reinstall the PWA during testing.
 
 ## 11. Release evidence to record

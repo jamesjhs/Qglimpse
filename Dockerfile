@@ -20,6 +20,8 @@ RUN npm prune --omit=dev --workspaces
 FROM node:20-alpine AS runtime
 
 ENV NODE_ENV=production
+ARG APP_PORT=2010
+ENV PORT=${APP_PORT}
 WORKDIR /app
 
 RUN apk add --no-cache libstdc++
@@ -32,5 +34,5 @@ COPY --from=build /app/packages/web/package.json packages/web/package.json
 COPY --from=build /app/packages/web/dist packages/web/dist
 COPY --from=build /app/scripts scripts
 
-EXPOSE 2010
+EXPOSE ${APP_PORT}
 CMD ["npm", "start"]

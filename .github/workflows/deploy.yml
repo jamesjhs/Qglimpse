@@ -47,6 +47,8 @@ jobs:
         with:
           context: .
           push: true
+          build-args: |
+            APP_PORT=${{ vars.PORT || '2010' }}
           tags: |
             ${{ env.IMAGE_REF }}
             ${{ env.IMAGE_LATEST }}
@@ -96,6 +98,7 @@ jobs:
           SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
           SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
           # Pull VARIABLES
+          PORT: ${{ vars.PORT || '2010' }}
           NODE_ENV: ${{ vars.NODE_ENV }}
           QUICKGLIMPSE_BASE_URL: ${{ vars.QUICKGLIMPSE_BASE_URL }}
           QUICKGLIMPSE_TRUST_PROXY: ${{ vars.QUICKGLIMPSE_TRUST_PROXY }}
@@ -118,6 +121,7 @@ jobs:
           echo "TURNSTILE_SITE_KEY=$TURNSTILE_SITE_KEY" >> .env
           echo "SMTP_USERNAME=$SMTP_USERNAME" >> .env
           echo "SMTP_PASSWORD=$SMTP_PASSWORD" >> .env
+          echo "PORT=$PORT" >> .env
           echo "NODE_ENV=$NODE_ENV" >> .env
           echo "QUICKGLIMPSE_BASE_URL=$QUICKGLIMPSE_BASE_URL" >> .env
           echo "QUICKGLIMPSE_TRUST_PROXY=$QUICKGLIMPSE_TRUST_PROXY" >> .env

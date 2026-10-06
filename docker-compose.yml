@@ -11,6 +11,12 @@ services:
     # Always restart the container unless it is explicitly stopped
     restart: unless-stopped
 
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
     # Load environment variables from the .env file
     env_file:
       - .env
@@ -31,7 +37,7 @@ services:
       - "traefik.http.routers.qglimpse-${BRANCH_NAME:-main}.rule=Host(`qglimpse.jahosi.co.uk`)"
 
       # Define the internal port for the qglimpse service within the container
-      - "traefik.http.services.qglimpse-${BRANCH_NAME:-main}.loadbalancer.server.port=2010"
+      - "traefik.http.services.qglimpse-${BRANCH_NAME:-main}.loadbalancer.server.port=${PORT:?PORT must be set}"
 
 # Define the external networks used by the services
 networks:
