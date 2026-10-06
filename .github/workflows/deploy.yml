@@ -89,7 +89,7 @@ jobs:
           TUNNEL_SERVICE_AUTH_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
         run: |
           # 1. Securely copy the .env file through the Cloudflare Tunnel to your app folder
-          scp .env sshjhs.jahosi.co.uk:/home/dockertunnel/qglimpse.jahosi.co.uk-2010/.env
+          scp .env sshgit.jahosi.co.uk:/home/dockertunnel/qglimpse.jahosi.co.uk-2010/.env
           
           # 2. Run the deployment commands through the Tunnel
           ssh sshgit.jahosi.co.uk "cd /home/dockertunnel/qglimpse.jahosi.co.uk-2010 && git pull origin main && docker compose up -d --build"
