@@ -4,7 +4,7 @@ on:
     branches: [ main ]
 
 env:
-  SSH_HOST: sshgit.jahosi.co.uk
+  SSH_HOST: sshjhs.jahosi.co.uk
   SSH_USER: dockertunnel
   DEPLOY_PATH: /home/dockertunnel/qglimpse.jahosi.co.uk-2010
 
