@@ -30,6 +30,9 @@ jobs:
           IMAGE_REPOSITORY="ghcr.io/${GITHUB_REPOSITORY,,}"
           APP_PORT="${{ vars.PORT || '2010' }}"
           QUICKGLIMPSE_BASE_URL="${{ vars.QUICKGLIMPSE_BASE_URL }}"
+          if [ "$REF_SLUG" = "testing" ]; then
+            QUICKGLIMPSE_BASE_URL="https://test-qglimpse.jahosi.co.uk"
+          fi
           test -n "$QUICKGLIMPSE_BASE_URL"
           QGLIMPSE_DOMAIN="$(node -e "console.log(new URL(process.argv[1]).hostname)" "$QUICKGLIMPSE_BASE_URL")"
           if [ "$REF_SLUG" = "testing" ] && [ "$QGLIMPSE_DOMAIN" != "test-qglimpse.jahosi.co.uk" ]; then
@@ -40,6 +43,7 @@ jobs:
           echo "REF_SLUG=${REF_SLUG}" >> "$GITHUB_ENV"
           echo "APP_PORT=${APP_PORT}" >> "$GITHUB_ENV"
           echo "QGLIMPSE_DOMAIN=${QGLIMPSE_DOMAIN}" >> "$GITHUB_ENV"
+          echo "QUICKGLIMPSE_BASE_URL=${QUICKGLIMPSE_BASE_URL}" >> "$GITHUB_ENV"
           echo "DEPLOY_PATH=${DEPLOY_PATH}" >> "$GITHUB_ENV"
           echo "IMAGE_REPOSITORY=${IMAGE_REPOSITORY}" >> "$GITHUB_ENV"
           echo "IMAGE_REF=${IMAGE_REPOSITORY}:${GITHUB_SHA}" >> "$GITHUB_ENV"
@@ -127,6 +131,9 @@ jobs:
 
           PORT="${APP_PORT:-2010}"
           BRANCH_NAME="${REF_SLUG:-${GITHUB_REF_NAME}}"
+          if [ "$BRANCH_NAME" = "testing" ]; then
+            QUICKGLIMPSE_BASE_URL="https://test-qglimpse.jahosi.co.uk"
+          fi
           test -n "$QGLIMPSE_DOMAIN"
           test -n "$PORT"
 
